@@ -552,10 +552,11 @@ function buildItem(item) {
   const val = getVal(item.id);
   let btns = opts.map(o => {
     const cls = val === o ? getTglCls(o) : '';
-    return `<button class="toggle-btn ${cls}" onclick="setTgl('${item.id}','${o}',this,${JSON.stringify(opts)})">${o}</button>`;
+    const safeO = o.replace(/'/g, "\\'");
+    return `<button class="toggle-btn ${cls}" data-item="${item.id}" data-val="${o}" onclick="setTgl(this)">${o}</button>`;
   }).join('');
   const naCls = val === 'N/A' ? 'na' : '';
-  btns += `<button class="toggle-btn ${naCls}" onclick="setTgl('${item.id}','N/A',this,${JSON.stringify(opts)})">N/A</button>`;
+  btns += `<button class="toggle-btn ${naCls}" data-item="${item.id}" data-val="N/A" onclick="setTgl(this)">N/A</button>`;
 
   const modeColor = MODE === 'saida' ? 'rgba(245,158,11,.6)' : 'rgba(56,189,248,.6)';
   html += `
@@ -610,7 +611,9 @@ function getTglCls(v) {
 }
 
 // ─── TOGGLE ───────────────────────────────
-function setTgl(itemId, val, btn, opts) {
+function setTgl(btn) {
+  const itemId = btn.dataset.item;
+  const val    = btn.dataset.val;
   setVal(itemId, val);
   saveState();
   const tg = btn.closest('.toggle-group');
