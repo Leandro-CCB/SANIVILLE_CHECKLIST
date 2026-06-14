@@ -193,6 +193,12 @@ body{background:var(--bg);color:var(--text);font-family:'IBM Plex Sans',sans-ser
 .item-text-input{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:12px;width:100%;outline:none;margin-top:6px;transition:border-color .2s}
 .item-text-input:focus{border-color:var(--accent)}
 
+/* ── CAMPO DESCRIÇÃO DE FALHA ────────────── */
+.falha-area{margin-top:6px}
+.falha-input{border-color:rgba(239,68,68,.35)}
+.falha-input::placeholder{color:rgba(239,68,68,.45)}
+.falha-input:focus{border-color:var(--fail)}
+
 /* ── SELECT / DROPDOWN ───────────────────── */
 .field-select{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:13px;width:100%;outline:none;transition:border-color .2s;appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%2394a3b8' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:32px;cursor:pointer}
 .field-select:focus{border-color:var(--accent)}
@@ -372,13 +378,20 @@ input[type=file]{display:none}
 
 <script>
 // ═══════════════════════════════════════════
-// CONFIG — preencha para conectar ao Supabase
+// CONFIG — Supabase Saniville
 // ═══════════════════════════════════════════
-const SUPABASE_URL    = '';
-const SUPABASE_ANON   = '';
-const TABLE_CHECKLIST = 'checklist_veiculos';
+const SUPABASE_URL    = 'https://sayagmwiuxznmcazzftb.supabase.co';
+const SUPABASE_ANON   = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNheWFnbXdpdXh6bm1jYXp6ZnRiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY4Njg4NDksImV4cCI6MjA5MjQ0NDg0OX0.eTPVg0c757QDvs5UBCsxCkJCNYBBEZA9A7KbQSbp9ug';
+const TABLE_CHECKLIST = 'saniville_checklists';
 const BUCKET_FOTOS    = 'checklist-fotos';
 const PHOTO_EXPIRY_DAYS = 30;
+const SB_HEADERS = {
+  'Content-Type': 'application/json',
+  'apikey': SUPABASE_ANON,
+  'Authorization': `Bearer ${SUPABASE_ANON}`,
+  'Accept-Profile': 'public',
+  'Content-Profile': 'public'
+};
 // ═══════════════════════════════════════════
 
 // Modo atual: 'saida' | 'chegada'
@@ -571,6 +584,14 @@ function buildItem(item) {
     </div>`;
   }
 
+  // Campo opcional para descrever o tipo de falha (aparece quando o status indica falha)
+  const falhaVal = st[`${MODE}_${item.id}_falha`] || '';
+  const showFalha = isFalha(val);
+  html += `<div class="falha-area" id="falha_${item.id}" style="display:${showFalha ? '' : 'none'}">
+    <div class="field-label">Descreva o tipo de falha (opcional)</div>
+    <input class="item-text-input falha-input" data-item="${item.id}" type="text" value="${falhaVal}" placeholder="Ex: vazamento, desgaste, peça quebrada..." oninput="setFalhaDesc(this)">
+  </div>`;
+
   if (item.foto) {
     html += `<div class="photo-area">
       <button class="photo-btn" onclick="triggerPhoto('${item.id}')">
@@ -610,6 +631,16 @@ function getTglCls(v) {
   return 'na';
 }
 
+// Indica se o valor selecionado representa uma falha
+function isFalha(v) { return getTglCls(v) === 'fail'; }
+
+// Atualiza a descrição do tipo de falha (campo opcional)
+function setFalhaDesc(input) {
+  const itemId = input.dataset.item;
+  st[`${MODE}_${itemId}_falha`] = input.value;
+  saveState();
+}
+
 // ─── TOGGLE ───────────────────────────────
 function setTgl(btn) {
   const itemId = btn.dataset.item;
@@ -619,6 +650,8 @@ function setTgl(btn) {
   const tg = btn.closest('.toggle-group');
   tg.querySelectorAll('.toggle-btn').forEach(b => b.className = 'toggle-btn');
   btn.className = 'toggle-btn ' + getTglCls(val);
+  const falhaDiv = document.getElementById('falha_' + itemId);
+  if (falhaDiv) falhaDiv.style.display = isFalha(val) ? '' : 'none';
   updateProgress();
   updateDot(itemId);
 }
@@ -753,57 +786,77 @@ function captureFields() {
 }
 
 // ─── VEÍCULOS / MOTORISTAS (Supabase) ─────
-const TABLE_VEICULOS   = 'veiculos';
-const TABLE_MOTORISTAS = 'motoristas';
+const TABLE_VEICULOS   = 'saniville_veiculos';
+const TABLE_MOTORISTAS = 'saniville_motoristas';
 
 async function loadVeiculos() {
   const sel = document.getElementById('placa');
-  if (SUPABASE_URL && SUPABASE_ANON) {
-    try {
-      const r = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_VEICULOS}?select=placa,nome&order=nome`, {
-        headers: { 'apikey': SUPABASE_ANON, 'Authorization': `Bearer ${SUPABASE_ANON}` }
-      });
-      if (r.ok) {
-        const data = await r.json();
+
+  // 1º — tenta Supabase (fonte de verdade)
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_VEICULOS}?select=placa,modelo&order=placa&status=eq.Ativo`, {
+      headers: SB_HEADERS
+    });
+    if (r.ok) {
+      const veics = await r.json();
+      if (veics.length > 0) {
         sel.className = 'field-select';
         sel.innerHTML = '<option value="">Selecione o veículo...</option>';
-        data.forEach(v => {
+        veics.forEach(v => {
           const opt = document.createElement('option');
           opt.value = v.placa;
-          opt.textContent = v.nome ? `${v.nome} — ${v.placa}` : v.placa;
+          opt.textContent = v.modelo ? `${v.placa} — ${v.modelo}` : v.placa;
           sel.appendChild(opt);
         });
-        // Restaurar seleção salva
         if (st._placa) { sel.value = st._placa; onVeiculoChange(sel); }
         return;
       }
-    } catch(e) {}
-  }
-  // Fallback: sem Supabase configurado — modo manual demo
+    }
+  } catch(e) {}
+
+  // 2º — fallback: base local do Gestão de Frota (fleetpro)
+  try {
+    const frota = JSON.parse(localStorage.getItem('fleetpro') || '{}');
+    if (frota.veiculos && frota.veiculos.length > 0) {
+      sel.className = 'field-select';
+      sel.innerHTML = '<option value="">Selecione o veículo...</option>';
+      [...frota.veiculos]
+        .sort((a, b) => (a.placa || '').localeCompare(b.placa || ''))
+        .forEach(v => {
+          const opt = document.createElement('option');
+          opt.value = v.placa;
+          opt.textContent = v.modelo ? `${v.placa} — ${v.modelo}` : v.placa;
+          sel.appendChild(opt);
+        });
+      if (st._placa) { sel.value = st._placa; onVeiculoChange(sel); }
+      return;
+    }
+  } catch(e) {}
+
+  // Fallback demo
   sel.className = 'field-select';
   sel.innerHTML = `
     <option value="">Selecione o veículo...</option>
     <option value="ABC1D23">ABC-1D23 — Caminhão VW</option>
     <option value="DEF3E45">DEF-3E45 — Caminhão MAN</option>
-    <option value="GHI5F67">GHI-5F67 — Caminhão Scania</option>
-    <option value="JKL7G89">JKL-7G89 — Caminhão Volvo</option>
-    <option value="MNO9H01">MNO-9H01 — Caminhão Mercedes</option>
   `;
   if (st._placa) { sel.value = st._placa; onVeiculoChange(sel); }
 }
 
 async function loadMotoristas() {
   const sel = document.getElementById('motorista');
-  if (SUPABASE_URL && SUPABASE_ANON) {
-    try {
-      const r = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_MOTORISTAS}?select=nome&order=nome`, {
-        headers: { 'apikey': SUPABASE_ANON, 'Authorization': `Bearer ${SUPABASE_ANON}` }
-      });
-      if (r.ok) {
-        const data = await r.json();
+
+  // 1º — tenta Supabase (fonte de verdade)
+  try {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_MOTORISTAS}?select=nome&order=nome&status=eq.Ativo`, {
+      headers: SB_HEADERS
+    });
+    if (r.ok) {
+      const mots = await r.json();
+      if (mots.length > 0) {
         sel.className = 'field-select';
         sel.innerHTML = '<option value="">Selecione o motorista...</option>';
-        data.forEach(m => {
+        mots.forEach(m => {
           const opt = document.createElement('option');
           opt.value = m.nome; opt.textContent = m.nome;
           sel.appendChild(opt);
@@ -811,17 +864,34 @@ async function loadMotoristas() {
         if (st._motorista) sel.value = st._motorista;
         return;
       }
-    } catch(e) {}
-  }
+    }
+  } catch(e) {}
+
+  // 2º — fallback: base local
+  try {
+    const frota = JSON.parse(localStorage.getItem('fleetpro') || '{}');
+    if (frota.motoristas && frota.motoristas.length > 0) {
+      sel.className = 'field-select';
+      sel.innerHTML = '<option value="">Selecione o motorista...</option>';
+      [...frota.motoristas]
+        .filter(m => !m.status || m.status === 'Ativo')
+        .sort((a, b) => (a.nome || '').localeCompare(b.nome || ''))
+        .forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m.nome; opt.textContent = m.nome;
+          sel.appendChild(opt);
+        });
+      if (st._motorista) sel.value = st._motorista;
+      return;
+    }
+  } catch(e) {}
+
   // Fallback demo
   sel.className = 'field-select';
   sel.innerHTML = `
     <option value="">Selecione o motorista...</option>
     <option value="Carlos Silva">Carlos Silva</option>
     <option value="João Pereira">João Pereira</option>
-    <option value="Pedro Santos">Pedro Santos</option>
-    <option value="Marcos Oliveira">Marcos Oliveira</option>
-    <option value="Lucas Costa">Lucas Costa</option>
   `;
   if (st._motorista) sel.value = st._motorista;
 }
@@ -922,34 +992,65 @@ async function confirmSubmit() {
   closeModal();
   const payload = buildPayload();
 
+  // Conta itens OK e falhas para o resumo no Gestão de Frota
+  let totalOk = 0, totalFalha = 0;
+  SECTIONS.forEach(sec => sec.items.forEach(item => {
+    const v = payload.itens[item.id]?.valor;
+    if (v) {
+      const pos = ['OK','SIM','COMPL','LIMPO','LIMPA','LIMPAS','LIMPOS'];
+      const neg = ['FALHA','NÃO','ESTOURO','RASGADA'];
+      if (neg.includes(v)) totalFalha++;
+      else totalOk++;
+    }
+  }));
+
+  // Salva registro finalizado no localStorage compartilhado com o Gestão de Frota
+  try {
+    const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
+    registros.unshift({
+      ...payload,
+      id: payload.checklist_id,
+      motorista_nome: vSel('motorista').trim(),
+      total_ok: totalOk,
+      total_falha: totalFalha,
+      total_itens: SECTIONS.reduce((s, sec) => s + sec.items.length, 0),
+    });
+    localStorage.setItem('cl_checklists', JSON.stringify(registros));
+  } catch(e) {}
+
   if (SUPABASE_URL && SUPABASE_ANON) {
     try {
+      const sbPayload = {
+        ...payload,
+        id: payload.checklist_id,
+        total_ok: totalOk,
+        total_falha: totalFalha,
+        total_itens: SECTIONS.reduce((s, sec) => s + sec.items.length, 0),
+        motorista_nome: vSel('motorista').trim()
+      };
       const r = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_CHECKLIST}`, {
         method: 'POST',
-        headers: {
-          'Content-Type':'application/json',
-          'apikey': SUPABASE_ANON,
-          'Authorization': `Bearer ${SUPABASE_ANON}`,
-          'Prefer': 'return=minimal'
-        },
-        body: JSON.stringify(payload)
+        headers: { ...SB_HEADERS, 'Prefer': 'return=minimal' },
+        body: JSON.stringify(sbPayload)
       });
       if (r.ok) {
         showToast('✓ Enviado com sucesso!', 'ok');
-        // Limpar apenas os dados do modo atual
         clearModeData();
         setTimeout(() => voltarSplash(), 1800);
       } else {
         console.error(await r.text());
-        showToast('✗ Erro ao enviar — veja console', 'err');
+        showToast('✓ Salvo localmente · Erro ao enviar Supabase', 'ok');
+        clearModeData();
+        setTimeout(() => voltarSplash(), 1800);
       }
     } catch(e) {
       console.error(e);
-      showToast('✗ Falha de conexão', 'err');
+      showToast('✓ Salvo localmente · Sem conexão', 'ok');
+      clearModeData();
+      setTimeout(() => voltarSplash(), 1800);
     }
   } else {
-    console.log('[PAYLOAD]', JSON.stringify(payload, null, 2));
-    showToast('✓ Registrado! (configure Supabase)', 'ok');
+    showToast('✓ Checklist registrado!', 'ok');
     clearModeData();
     setTimeout(() => voltarSplash(), 1800);
   }
@@ -987,6 +1088,8 @@ function buildPayload() {
   SECTIONS.forEach(sec => sec.items.forEach(item => {
     const obj = { valor: getVal(item.id) || null };
     if (item.extra) obj[item.extra] = st[`${MODE}_${item.extra}`] || null;
+    const falhaDesc = st[`${MODE}_${item.id}_falha`] || '';
+    if (falhaDesc) obj.falha_desc = falhaDesc;
     payload.itens[item.id] = obj;
   }));
   return payload;
