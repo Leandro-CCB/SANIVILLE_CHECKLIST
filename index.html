@@ -1001,9 +1001,57 @@ function submitChecklist() {
   document.getElementById('modal-overlay').classList.add('active');
 }
 
+// Converte um data URL base64 em Blob
+function dataURLtoBlob(dataUrl) {
+  const [header, b64] = dataUrl.split(',');
+  const mimeMatch = header.match(/data:(.*?);base64/);
+  const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+// Faz upload de todas as fotos do MODE atual para o Storage do Supabase.
+// Retorna um objeto { [itemId]: [ 'checklist-fotos/path1', ... ] }
+async function uploadFotosChecklist(checklistId) {
+  const SB_STORAGE = `${SUPABASE_URL}/storage/v1/object`;
+  const result = {};
+  const entries = Object.entries(st.fotos).filter(([key, f]) => f.mode === MODE);
+  for (const [key, f] of entries) {
+    try {
+      const blob = dataURLtoBlob(f.base64);
+      const ext = blob.type.includes('webp') ? 'webp' : 'jpg';
+      const path = `${checklistId}/${f.itemId}_${f.ts}.${ext}`;
+      const res = await fetch(`${SB_STORAGE}/${BUCKET_FOTOS}/${path}`, {
+        method: 'POST',
+        headers: { 'apikey': SUPABASE_ANON, 'Authorization': 'Bearer ' + SUPABASE_ANON, 'Content-Type': blob.type, 'x-upsert': 'true' },
+        body: blob
+      });
+      if (res.ok) {
+        if (!result[f.itemId]) result[f.itemId] = [];
+        result[f.itemId].push(path);
+      } else {
+        console.error('Upload foto falhou:', f.itemId, await res.text());
+      }
+    } catch(e) { console.error('Upload foto erro:', e); }
+  }
+  return result;
+}
+
 async function confirmSubmit() {
   closeModal();
   const payload = buildPayload();
+
+  // Envia fotos para o Storage e anexa os caminhos a cada item
+  if (SUPABASE_URL && SUPABASE_ANON) {
+    try {
+      const fotosPorItem = await uploadFotosChecklist(payload.checklist_id);
+      Object.entries(fotosPorItem).forEach(([itemId, paths]) => {
+        if (payload.itens[itemId]) payload.itens[itemId].fotos = paths;
+      });
+    } catch(e) { console.error('Falha ao enviar fotos:', e); }
+  }
 
   // Conta itens OK e falhas para o resumo no Gestão de Frota
   let totalOk = 0, totalFalha = 0;
@@ -1038,8 +1086,7 @@ async function confirmSubmit() {
         id: payload.checklist_id,
         total_ok: totalOk,
         total_falha: totalFalha,
-        total_itens: SECTIONS.reduce((s, sec) => s + sec.items.length, 0),
-        motorista_nome: vSel('motorista').trim()
+        total_itens: SECTIONS.reduce((s, sec) => s + sec.items.length, 0)
       };
       const r = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_CHECKLIST}`, {
         method: 'POST',
