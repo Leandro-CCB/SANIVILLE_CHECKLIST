@@ -1,12 +1,12 @@
 {
-  "name": "Check List Veículos Pesados",
-  "short_name": "CheckList",
+  "name": "Check Saniville",
+  "short_name": "Check Saniville",
   "description": "Checklist de inspeção de veículos pesados — Saída e Chegada",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#f4f6f9",
+  "background_color": "#0d6efd",
   "theme_color": "#0d6efd",
   "lang": "pt-BR",
   "icons": [
@@ -17,7 +17,7 @@
       "purpose": "any"
     },
     {
-      "src": "/icons/icon-192.png",
+      "src": "/icons/icon-192-maskable.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "maskable"
@@ -29,7 +29,7 @@
       "purpose": "any"
     },
     {
-      "src": "/icons/icon-512.png",
+      "src": "/icons/icon-512-maskable.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
@@ -42,14 +42,14 @@
       "short_name": "Saída",
       "description": "Iniciar checklist de saída",
       "url": "/?mode=saida",
-      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+      "icons": [{ "src": "/icons/icon-192-maskable.png", "sizes": "192x192" }]
     },
     {
       "name": "Chegada",
       "short_name": "Chegada",
       "description": "Iniciar checklist de chegada",
       "url": "/?mode=chegada",
-      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+      "icons": [{ "src": "/icons/icon-192-maskable.png", "sizes": "192x192" }]
     }
   ]
 }
