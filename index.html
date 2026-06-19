@@ -317,9 +317,9 @@ input[type=file]{display:none}
       <span class="btn-label">SAÍDA</span>
       <span class="btn-desc">Inspeção antes<br>de sair em rota</span>
     </button>
-    <button class="mode-btn chegada" onclick="selectMode('chegada')">
+    <button class="mode-btn chegada" id="btn-mode-retorno" onclick="selectMode('chegada')">
       <span class="btn-icon">🏁</span>
-      <span class="btn-label">CHEGADA</span>
+      <span class="btn-label">RETORNO</span>
       <span class="btn-desc">Inspeção ao<br>retornar da rota</span>
     </button>
   </div>
@@ -527,6 +527,17 @@ const SECTIONS = [
 
 // ─── SPLASH / MODO ────────────────────────
 function selectMode(mode) {
+  // Bloqueia retorno se não houver saída registrada do mesmo veículo hoje
+  if (mode === 'chegada') {
+    const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
+    const hoje = new Date().toISOString().slice(0, 10);
+    const saidaHoje = registros.find(r => r.modo === 'saida' && r.data_check === hoje);
+    if (!saidaHoje) {
+      showToast('⚠ Registre a SAÍDA de hoje antes do RETORNO', 'err');
+      return;
+    }
+  }
+
   MODE = mode;
 
   // Se tiver um checklist de saída salvo, associar id
@@ -535,10 +546,10 @@ function selectMode(mode) {
   // Adaptar layout ao modo
   const isSaida = mode === 'saida';
   const badge = document.getElementById('mode-badge-el');
-  badge.innerHTML = `<span class="mode-badge ${mode}">${isSaida ? '🌅 SAÍDA' : '🏁 CHEGADA'}</span>`;
+  badge.innerHTML = `<span class="mode-badge ${mode}">${isSaida ? '🌅 SAÍDA' : '🏁 RETORNO'}</span>`;
 
   document.getElementById('btn-submit').className = `btn-submit ${mode}`;
-  document.getElementById('btn-submit').textContent = isSaida ? '✓ REGISTRAR SAÍDA' : '✓ REGISTRAR CHEGADA';
+  document.getElementById('btn-submit').textContent = isSaida ? '✓ REGISTRAR SAÍDA' : '✓ REGISTRAR RETORNO';
 
   // KM Final só aparece na chegada
   document.getElementById('campo-km-final').style.display = isSaida ? 'none' : '';
@@ -551,6 +562,17 @@ function selectMode(mode) {
   setTimeout(() => { splash.style.display = 'none'; }, 400);
 
   document.getElementById('app').style.display = 'block';
+
+  // Se for retorno, pré-preencher placa/motorista da saída do dia
+  if (mode === 'chegada') {
+    const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
+    const hoje = new Date().toISOString().slice(0, 10);
+    const saidaHoje = registros.find(r => r.modo === 'saida' && r.data_check === hoje);
+    if (saidaHoje) {
+      st._placa_retorno     = saidaHoje.placa;
+      st._motorista_retorno = saidaHoje.motorista_nome || saidaHoje.motorista;
+    }
+  }
 
   // Restaurar dados identificação
   restoreFields();
@@ -570,6 +592,7 @@ function voltarSplash() {
   splash.style.display = 'flex';
   splash.classList.remove('hide');
   MODE = null;
+  atualizarBotaoRetorno();
 }
 
 // ─── SUPABASE ─────────────────────────────
@@ -869,7 +892,8 @@ async function loadVeiculos() {
           opt.textContent = v.modelo ? `${v.placa} — ${v.modelo}` : v.placa;
           sel.appendChild(opt);
         });
-        if (st._placa) { sel.value = st._placa; onVeiculoChange(sel); }
+        const placaAlvo = st._placa_retorno || st._placa;
+        if (placaAlvo) { sel.value = placaAlvo; onVeiculoChange(sel); }
         return;
       }
     }
@@ -882,7 +906,8 @@ async function loadVeiculos() {
     <option value="ABC1D23">ABC-1D23 — Caminhão VW</option>
     <option value="DEF3E45">DEF-3E45 — Caminhão MAN</option>
   `;
-  if (st._placa) { sel.value = st._placa; onVeiculoChange(sel); }
+  const placaAlvoFb = st._placa_retorno || st._placa;
+  if (placaAlvoFb) { sel.value = placaAlvoFb; onVeiculoChange(sel); }
 }
 
 async function loadMotoristas() {
@@ -903,7 +928,8 @@ async function loadMotoristas() {
           opt.value = m.nome; opt.textContent = m.nome;
           sel.appendChild(opt);
         });
-        if (st._motorista) sel.value = st._motorista;
+        const motAlvo = st._motorista_retorno || st._motorista;
+        if (motAlvo) sel.value = motAlvo;
         return;
       }
     }
@@ -916,7 +942,8 @@ async function loadMotoristas() {
     <option value="Carlos Silva">Carlos Silva</option>
     <option value="João Pereira">João Pereira</option>
   `;
-  if (st._motorista) sel.value = st._motorista;
+  const motAlvoFb = st._motorista_retorno || st._motorista;
+  if (motAlvoFb) sel.value = motAlvoFb;
 }
 
 // ─── LÓGICA DE RODÍZIO ────────────────────
@@ -1150,16 +1177,55 @@ function submitChecklist() {
     }
   }
 
-  let incomplete = 0;
+  let totalOk = 0, totalFalha = 0, totalNa = 0, totalVazio = 0;
   SECTIONS.forEach(sec => sec.items.forEach(item => {
-    if (!getVal(item.id)) incomplete++;
+    const val = getVal(item.id);
+    if (!val) { totalVazio++; return; }
+    const pos = ['OK','SIM','COMPL','LIMPO','LIMPA','LIMPAS','LIMPOS'];
+    const neg = ['FALHA','NÃO','ESTOURO','RASGADA','VAZA','FALTA','SUJO','SUJA'];
+    if (neg.includes(val)) totalFalha++;
+    else if (val === 'N/A') totalNa++;
+    else totalOk++;
   }));
+  const totalFotos = Object.values(st.fotos).filter(f => f.mode === MODE).length;
+  const totalItens = SECTIONS.reduce((s, sec) => s + sec.items.length, 0);
+  const modeLabel = MODE === 'saida' ? 'SAÍDA' : 'RETORNO';
+  const placaRes = vSel('placa').trim();
+  const motRes = vSel('motorista').trim();
 
-  const modeLabel = MODE === 'saida' ? 'SAÍDA' : 'CHEGADA';
-  document.getElementById('modal-title').textContent = incomplete ? `⚠ Check ${modeLabel} Incompleto` : `✓ Registrar ${modeLabel}`;
-  document.getElementById('modal-body').innerHTML = incomplete
-    ? `<b>${incomplete} item(s)</b> ainda não preenchidos. Deseja registrar a ${modeLabel} mesmo assim?`
-    : `Todos os itens preenchidos. Confirmar o registro de <b>${modeLabel}</b> para o sistema?`;
+  const resumoHTML = `
+    <div style="font-size:12px;color:var(--text3);margin-bottom:12px;font-weight:600;letter-spacing:.5px">
+      ${placaRes} · ${motRes}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
+      <div style="background:rgba(25,135,84,.08);border:1.5px solid rgba(25,135,84,.25);border-radius:10px;padding:10px;text-align:center">
+        <div style="font-size:22px;font-weight:900;color:var(--ok);font-family:var(--font-head)">${totalOk}</div>
+        <div style="font-size:10px;color:var(--ok);font-weight:700;letter-spacing:.5px">OK</div>
+      </div>
+      <div style="background:${totalFalha ? 'rgba(220,53,69,.08)' : 'rgba(148,163,184,.08)'};border:1.5px solid ${totalFalha ? 'rgba(220,53,69,.3)' : 'var(--border)'};border-radius:10px;padding:10px;text-align:center">
+        <div style="font-size:22px;font-weight:900;color:${totalFalha ? 'var(--fail)' : 'var(--na)'};font-family:var(--font-head)">${totalFalha}</div>
+        <div style="font-size:10px;color:${totalFalha ? 'var(--fail)' : 'var(--na)'};font-weight:700;letter-spacing:.5px">FALHA${totalFalha !== 1 ? 'S' : ''}</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      <div style="flex:1;background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:8px;text-align:center">
+        <div style="font-size:16px;font-weight:800;color:var(--text);font-family:var(--font-head)">${totalVazio}</div>
+        <div style="font-size:10px;color:var(--text3);font-weight:600">NÃO PREENCHIDOS</div>
+      </div>
+      <div style="flex:1;background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:8px;text-align:center">
+        <div style="font-size:16px;font-weight:800;color:var(--text);font-family:var(--font-head)">${totalFotos}</div>
+        <div style="font-size:10px;color:var(--text3);font-weight:600">FOTO${totalFotos !== 1 ? 'S' : ''}</div>
+      </div>
+      <div style="flex:1;background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:8px;text-align:center">
+        <div style="font-size:16px;font-weight:800;color:var(--text);font-family:var(--font-head)">${totalItens - totalVazio}/${totalItens}</div>
+        <div style="font-size:10px;color:var(--text3);font-weight:600">PREENCHIDOS</div>
+      </div>
+    </div>
+    ${totalVazio > 0 ? `<div style="font-size:12px;color:var(--text3);text-align:center">${totalVazio} item(s) sem resposta serão registrados em branco.</div>` : ''}
+  `;
+
+  document.getElementById('modal-title').textContent = `Resumo — ${modeLabel}`;
+  document.getElementById('modal-body').innerHTML = resumoHTML;
   document.getElementById('modal-confirm-btn').onclick = confirmSubmit;
   document.getElementById('modal-overlay').classList.add('active');
 }
@@ -1333,9 +1399,25 @@ function showToast(msg, type='') {
 // ─── BOOT ─────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
   loadState(); // carrega dados salvos antes de exibir splash
-  // Mostrar data no splash dinamicamente
-  const hoje = new Date().toLocaleDateString('pt-BR');
+  atualizarBotaoRetorno();
 });
+
+function atualizarBotaoRetorno() {
+  const btn = document.getElementById('btn-mode-retorno');
+  if (!btn) return;
+  const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
+  const hoje = new Date().toISOString().slice(0, 10);
+  const temSaida = registros.some(r => r.modo === 'saida' && r.data_check === hoje);
+  if (temSaida) {
+    btn.style.opacity = '1';
+    btn.style.filter = '';
+    btn.querySelector('.btn-desc').textContent = 'Inspeção ao\nretornar da rota';
+  } else {
+    btn.style.opacity = '0.4';
+    btn.style.filter = 'grayscale(1)';
+    btn.querySelector('.btn-desc').textContent = 'Registre a saída\nprimeiro';
+  }
+}
 </script>
 
 <script>
