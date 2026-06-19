@@ -217,6 +217,23 @@ body{background:linear-gradient(135deg, #f4f6f9 0%, #e8eef3 100%);color:var(--te
 .item-text-input{background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font-family:var(--font-body);font-size:12px;width:100%;outline:none;margin-top:6px;transition:border-color .2s}
 .item-text-input:focus{border-color:var(--accent)}
 
+/* ── ALERTA DE COMBUSTÍVEL ───────────────── */
+.fuel-alert-card{margin-top:10px;border-radius:10px;padding:10px 12px;font-family:var(--font-body);font-size:11.5px;line-height:1.55;border:1.5px solid var(--border);background:#f8fafc;color:var(--text2)}
+.fuel-alert-card.neutral{border-color:var(--border);background:#f8fafc;color:var(--text3)}
+.fuel-alert-card.ok{border-color:rgba(25,135,84,.35);background:rgba(25,135,84,.07);color:var(--text2)}
+.fuel-alert-card.warn{border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.09);color:var(--text2)}
+.fuel-alert-card.alert{border-color:var(--fail);background:rgba(220,53,69,.09);color:var(--text2);animation:pulseRed 1.8s ease-in-out infinite}
+.fuel-alert-title{font-family:var(--font-head);font-weight:800;font-size:13px;letter-spacing:.5px;margin-bottom:6px;text-transform:uppercase}
+.fuel-alert-bar{height:6px;border-radius:4px;background:rgba(0,0,0,.07);overflow:hidden;margin-bottom:6px}
+.fuel-alert-bar-fill{height:100%;border-radius:4px;background:var(--ok);transition:width .3s}
+.fuel-alert-card.warn .fuel-alert-bar-fill{background:#f59e0b}
+.fuel-alert-card.alert .fuel-alert-bar-fill{background:var(--fail)}
+.fuel-alert-stats{font-size:10.5px;color:var(--text3)}
+
+/* ── CAMPO OBRIGATÓRIO ───────────────────── */
+.field-required{color:var(--fail);font-weight:800}
+.field-input.field-invalid{border-color:var(--fail)!important;box-shadow:0 0 0 3px rgba(220,53,69,.15)!important}
+
 /* ── CAMPO DESCRIÇÃO DE FALHA ────────────── */
 .falha-area{margin-top:6px}
 .falha-input{border-color:rgba(220,53,69,.35)}
@@ -330,7 +347,7 @@ input[type=file]{display:none}
   </div>
 
   <!-- SUPABASE STATUS -->
-  <div class="supabase-bar" id="supabase-bar">
+  <div class="supabase-bar" id="supabase-bar" style="display:none">
     <div class="dot"></div>
     <span id="supabase-label">Supabase: configure as variáveis no script</span>
   </div>
@@ -361,12 +378,15 @@ input[type=file]{display:none}
         <input class="field-input" id="data-check" type="date" readonly style="opacity:.7;cursor:default">
       </div>
       <div>
-        <div class="field-label" id="label-km-a">KM Atual</div>
+        <div class="field-label" id="label-km-a">KM Atual <span class="field-required">*</span></div>
         <input class="field-input" id="km-atual" type="number" placeholder="000000">
       </div>
       <div id="campo-km-final" style="display:none">
-        <div class="field-label">KM Final</div>
+        <div class="field-label">KM Final <span class="field-required">*</span></div>
         <input class="field-input" id="km-final" type="number" placeholder="000000">
+      </div>
+      <div class="full">
+        <div class="fuel-alert-card neutral" id="fuel-alert-card">⛽ Selecione o veículo para ver a estimativa de combustível.</div>
       </div>
     </div>
   </div>
@@ -540,6 +560,7 @@ function selectMode(mode) {
   renderSections();
   updateProgress();
   setupAutoSave();
+  updateFuelAlert();
 }
 
 function voltarSplash() {
@@ -822,20 +843,24 @@ function captureFields() {
 }
 
 // ─── VEÍCULOS / MOTORISTAS (Supabase) ─────
-const TABLE_VEICULOS   = 'saniville_veiculos';
-const TABLE_MOTORISTAS = 'saniville_motoristas';
+const TABLE_VEICULOS    = 'saniville_veiculos';
+const TABLE_MOTORISTAS  = 'saniville_motoristas';
+const TABLE_COMBUSTIVEL = 'saniville_combustivel';
+
+let VEICULOS_CACHE = []; // [{id, placa, modelo}] — alimentado pelo Supabase, usado p/ achar o id do veículo
 
 async function loadVeiculos() {
   const sel = document.getElementById('placa');
 
   // 1º — tenta Supabase (fonte de verdade)
   try {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_VEICULOS}?select=placa,modelo&order=placa&status=eq.Ativo`, {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_VEICULOS}?select=id,placa,modelo&order=placa&status=eq.Ativo`, {
       headers: SB_HEADERS
     });
     if (r.ok) {
       const veics = await r.json();
       if (veics.length > 0) {
+        VEICULOS_CACHE = veics;
         sel.className = 'field-select';
         sel.innerHTML = '<option value="">Selecione o veículo...</option>';
         veics.forEach(v => {
@@ -850,26 +875,7 @@ async function loadVeiculos() {
     }
   } catch(e) {}
 
-  // 2º — fallback: base local do Gestão de Frota (fleetpro)
-  try {
-    const frota = JSON.parse(localStorage.getItem('fleetpro') || '{}');
-    if (frota.veiculos && frota.veiculos.length > 0) {
-      sel.className = 'field-select';
-      sel.innerHTML = '<option value="">Selecione o veículo...</option>';
-      [...frota.veiculos]
-        .sort((a, b) => (a.placa || '').localeCompare(b.placa || ''))
-        .forEach(v => {
-          const opt = document.createElement('option');
-          opt.value = v.placa;
-          opt.textContent = v.modelo ? `${v.placa} — ${v.modelo}` : v.placa;
-          sel.appendChild(opt);
-        });
-      if (st._placa) { sel.value = st._placa; onVeiculoChange(sel); }
-      return;
-    }
-  } catch(e) {}
-
-  // Fallback demo
+  // Fallback demo (sem conexão com o Supabase)
   sel.className = 'field-select';
   sel.innerHTML = `
     <option value="">Selecione o veículo...</option>
@@ -900,25 +906,6 @@ async function loadMotoristas() {
         if (st._motorista) sel.value = st._motorista;
         return;
       }
-    }
-  } catch(e) {}
-
-  // 2º — fallback: base local
-  try {
-    const frota = JSON.parse(localStorage.getItem('fleetpro') || '{}');
-    if (frota.motoristas && frota.motoristas.length > 0) {
-      sel.className = 'field-select';
-      sel.innerHTML = '<option value="">Selecione o motorista...</option>';
-      [...frota.motoristas]
-        .filter(m => !m.status || m.status === 'Ativo')
-        .sort((a, b) => (a.nome || '').localeCompare(b.nome || ''))
-        .forEach(m => {
-          const opt = document.createElement('option');
-          opt.value = m.nome; opt.textContent = m.nome;
-          sel.appendChild(opt);
-        });
-      if (st._motorista) sel.value = st._motorista;
-      return;
     }
   } catch(e) {}
 
@@ -981,6 +968,132 @@ function onVeiculoChange(sel) {
     hidden.value = '';
   }
   saveState();
+  updateFuelAlert();
+}
+
+// ─── ALERTA DE COMBUSTÍVEL (dados direto do Supabase) ─────
+// Lê os abastecimentos de TANQUE CHEIO do veículo selecionado direto das
+// tabelas do Supabase (saniville_veiculos / saniville_combustivel) e estima
+// quanto do tanque já foi consumido desde o último abastecimento completo.
+const FUEL_TANQUE_REF_L = 240; // capacidade média de referência da frota (não há cadastro por veículo)
+const FUEL_NUM_ABASTEC  = 5;   // usa só os últimos N abastecimentos de tanque cheio (média "móvel")
+
+// Busca no Supabase os últimos abastecimentos de tanque cheio do veículo (pela placa)
+async function getCombustivelVeiculo(placa) {
+  try {
+    // 1) Acha o id do veículo — usa o cache já carregado por loadVeiculos(); se não houver, consulta o Supabase
+    let vei = VEICULOS_CACHE.find(v => v.placa === placa);
+    if (!vei) {
+      const rVei = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_VEICULOS}?select=id,placa&placa=eq.${encodeURIComponent(placa)}`, { headers: SB_HEADERS });
+      if (!rVei.ok) return { ok:false };
+      const veis = await rVei.json();
+      vei = veis[0];
+    }
+    if (!vei) return { ok:true, hasData:false };
+
+    // 2) Busca os abastecimentos de tanque cheio mais recentes desse veículo direto no Supabase
+    const rComb = await fetch(
+      `${SUPABASE_URL}/rest/v1/${TABLE_COMBUSTIVEL}?select=km,km_l,data,hora&veiculo=eq.${encodeURIComponent(vei.id)}&cheio=eq.1&order=data.desc,hora.desc&limit=20`,
+      { headers: SB_HEADERS }
+    );
+    if (!rComb.ok) return { ok:false };
+    const rows = await rComb.json();
+
+    // Apenas registros com km/L já calculado e válido
+    const cheios = rows.filter(c => c.km_l && c.km_l !== '-' && !isNaN(parseFloat(c.km_l)));
+    if (!cheios.length) return { ok:true, hasData:false };
+
+    const ultimos = cheios.slice(0, FUEL_NUM_ABASTEC);
+    const mediaKmL = ultimos.reduce((s, c) => s + parseFloat(c.km_l), 0) / ultimos.length;
+
+    return {
+      ok: true, hasData: true,
+      mediaKmL,
+      n: ultimos.length,
+      kmUltimo: parseInt(cheios[0].km || 0),
+      dataUltimo: cheios[0].data || ''
+    };
+  } catch(e) { return { ok:false }; }
+}
+
+function fmtDataBR(iso) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-');
+  return (d && m && y) ? `${d}/${m}/${y}` : iso;
+}
+
+// Evita disparar uma consulta ao Supabase a cada tecla digitada no hodômetro
+let _fuelDebounce = null;
+function scheduleFuelAlertUpdate() {
+  clearTimeout(_fuelDebounce);
+  _fuelDebounce = setTimeout(updateFuelAlert, 450);
+}
+
+// Token de corrida — garante que, se o usuário trocar de veículo rápido,
+// só a resposta da consulta mais recente atualiza o card
+let _fuelReqId = 0;
+
+// Atualiza o card de alerta de combustível com dados consultados ao vivo no Supabase
+async function updateFuelAlert() {
+  const card = document.getElementById('fuel-alert-card');
+  if (!card) return;
+
+  const placa = vSel('placa').trim();
+  if (!placa) {
+    card.className = 'fuel-alert-card neutral';
+    card.innerHTML = '⛽ Selecione o veículo para ver a estimativa de combustível.';
+    return;
+  }
+
+  const myReq = ++_fuelReqId;
+  card.className = 'fuel-alert-card neutral';
+  card.innerHTML = '⛽ Verificando...';
+
+  const info = await getCombustivelVeiculo(placa);
+  if (myReq !== _fuelReqId) return; // resposta antiga, descarta
+
+  // Sem dado suficiente = sem chute
+  if (!info || !info.ok) {
+    card.className = 'fuel-alert-card neutral';
+    card.innerHTML = '⛽ Sem conexão para verificar combustível.';
+    return;
+  }
+  if (!info.hasData) {
+    card.className = 'fuel-alert-card neutral';
+    card.innerHTML = '⛽ Nenhum abastecimento de tanque cheio registrado para este veículo.';
+    return;
+  }
+
+  const kmAtualStr = v('km-atual') || (MODE === 'chegada' ? v('km-final') : '');
+  const kmAtual = parseInt(kmAtualStr || 0);
+
+  if (!kmAtualStr) {
+    card.className = 'fuel-alert-card neutral';
+    card.innerHTML = `⛽ Informe o hodômetro para estimar o combustível.`;
+    return;
+  }
+
+  const kmRodado = kmAtual - info.kmUltimo;
+  if (kmRodado < 0) {
+    card.className = 'fuel-alert-card neutral';
+    card.innerHTML = `⚠️ Hodômetro menor que o último abastecimento. Verifique o valor.`;
+    return;
+  }
+
+  const litrosConsumidos = kmRodado / info.mediaKmL;
+  const pct = Math.min(100, (litrosConsumidos / FUEL_TANQUE_REF_L) * 100);
+
+  let cls = 'ok', titulo = '🟢 Nível estimado do tanque OK';
+  if (pct >= 85)      { cls = 'alert'; titulo = '🔴 ABASTECER — tanque deve estar quase vazio'; }
+  else if (pct >= 65) { cls = 'warn';  titulo = '🟠 Atenção — considere abastecer em breve'; }
+
+  card.className = 'fuel-alert-card ' + cls;
+  const kmDesc = info.dataUltimo ? `Último cheio: ${info.kmUltimo.toLocaleString('pt-BR')} km · ${fmtDataBR(info.dataUltimo)}` : `Último cheio: ${info.kmUltimo.toLocaleString('pt-BR')} km`;
+  card.innerHTML = `
+    <div class="fuel-alert-title">${titulo}</div>
+    <div class="fuel-alert-bar"><div class="fuel-alert-bar-fill" style="width:${pct.toFixed(0)}%"></div></div>
+    <div class="fuel-alert-stats">${pct.toFixed(0)}% consumido · ${kmDesc}</div>
+  `;
 }
 
 function restoreFields() {
@@ -1002,6 +1115,13 @@ function setupAutoSave() {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', saveState);
   });
+  ['km-atual','km-final'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('input', scheduleFuelAlertUpdate);
+      el.addEventListener('input', () => el.classList.remove('field-invalid'));
+    }
+  });
 }
 
 // ─── SUBMIT ───────────────────────────────
@@ -1009,6 +1129,26 @@ function submitChecklist() {
   const placa = vSel('placa').trim();
   const mot   = vSel('motorista').trim();
   if (!placa || !mot) { showToast('⚠ Preencha Placa e Motorista', 'err'); return; }
+
+  // Hodômetro é obrigatório
+  const kmAtualEl = document.getElementById('km-atual');
+  if (!v('km-atual').trim()) {
+    kmAtualEl.classList.add('field-invalid');
+    kmAtualEl.scrollIntoView({ behavior:'smooth', block:'center' });
+    kmAtualEl.focus();
+    showToast('⚠ Informe o Hodômetro (KM Atual) — campo obrigatório', 'err');
+    return;
+  }
+  if (MODE === 'chegada') {
+    const kmFinalEl = document.getElementById('km-final');
+    if (!v('km-final').trim()) {
+      kmFinalEl.classList.add('field-invalid');
+      kmFinalEl.scrollIntoView({ behavior:'smooth', block:'center' });
+      kmFinalEl.focus();
+      showToast('⚠ Informe o KM Final — campo obrigatório', 'err');
+      return;
+    }
+  }
 
   let incomplete = 0;
   SECTIONS.forEach(sec => sec.items.forEach(item => {
