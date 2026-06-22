@@ -317,10 +317,22 @@ input[type=file]{display:none}
       <span class="btn-label">SAÍDA</span>
       <span class="btn-desc">Inspeção antes<br>de sair em rota</span>
     </button>
-    <button class="mode-btn chegada" id="btn-mode-retorno" onclick="selectMode('chegada')">
+    <button class="mode-btn chegada" id="btn-mode-retorno" onclick="iniciarRetorno()">
       <span class="btn-icon">🏁</span>
       <span class="btn-label">RETORNO</span>
-      <span class="btn-desc">Inspeção ao<br>retornar da rota</span>
+      <span class="btn-desc" id="desc-retorno">Selecione a placa<br>para continuar</span>
+    </button>
+  </div>
+
+  <!-- Seletor de placa para retorno -->
+  <div id="retorno-placa-area" style="width:100%;max-width:340px;margin-top:14px;display:none">
+    <div class="field-label" style="margin-bottom:6px">PLACA DO VEÍCULO PARA RETORNO</div>
+    <select class="field-select" id="splash-placa-retorno" onchange="onSplashPlacaChange(this)">
+      <option value="">Selecione a placa...</option>
+    </select>
+    <div id="splash-retorno-msg" style="font-size:11px;margin-top:8px;font-family:var(--font-body);font-weight:600;text-align:center"></div>
+    <button id="btn-confirmar-retorno" class="mode-btn chegada" onclick="confirmarRetorno()" style="display:none;width:100%;margin-top:10px;padding:14px 16px">
+      <span class="btn-label" style="color:var(--chegada)">✓ CONFIRMAR RETORNO</span>
     </button>
   </div>
 
@@ -472,6 +484,7 @@ const SECTIONS = [
       {id:'pneus',        label:'Condições dos Pneus e Estepe',          foto:true},
       {id:'protetores',   label:'Protetores das Rodas Traseiras'},
       {id:'retentores',   label:'Retentores das Rodas',                  sub:'Em condições / Vazando / Estourado', opts:['OK','VAZA','ESTOURO']},
+      {id:'suspensao',    label:'Suspensão',                             sub:'Amortecedores, molas, jumelos, balança'},
       {id:'farois',       label:'Faróis Dianteiros de Luz'},
       {id:'lant_lat',     label:'Lanternas Laterais / Iluminação Placa Traseira'},
       {id:'lant_tras',    label:'Lanternas Vermelhas Traseiras / Luz de Ré'},
@@ -481,16 +494,24 @@ const SECTIONS = [
       {id:'fitas_ref',    label:'Condições das Fitas Refletivas',        sub:'Traseiro e lateral', foto:true},
       {id:'parachoque',   label:'Para-choques Dianteiro e Traseiro'},
       {id:'extintor',     label:'Extintor de Incêndio',                  sub:'Verificar vencimento', extra:'extintor_venc', extraLabel:'Vencimento'},
-      {id:'capa_ext',     label:'Situação da Capa do Extintor',          opts:['LIMPA','SUJA','RASGADA']},
+      {id:'capa_ext',     label:'Situação da Capa do Extintor e Suporte', opts:['LIMPA','SUJA','RASGADA']},
+      {id:'limpeza',      label:'Limpeza do Caminhão',                   opts:['LIMPO','SUJO'], foto:true},
       {id:'graxa_cam',    label:'Graxa Caminhão – Todos os Bicos'},
       {id:'reaperto',     label:'Necessidade de Reaperto nos Parafusos'},
       {id:'diesel',       label:'Óleo Diesel',                           sub:'Se precisar abastecer: avisar Edson/Jonatas/Henrique'},
-      {id:'limpeza',      label:'Limpeza do Caminhão',                   opts:['LIMPO','SUJO'], foto:true},
+    ]
+  },
+  {
+    id:'cabine', icon:'🪑', title:'CABINE',
+    items:[
       {id:'documentacao', label:'Documentação do Caminhão em Ordem',     sub:'Indicar vencimento', extra:'doc_venc', extraLabel:'Vencimento'},
+      {id:'ar_cond',      label:'Ar Condicionado',                       sub:'Gás e filtros'},
+      {id:'vidros_el',    label:'Vidros Elétricos'},
       {id:'velocimetro',  label:'Velocímetro'},
       {id:'tacografo',    label:'Tacógrafo e Disco do Tacógrafo',        foto:true},
       {id:'buzina',       label:'Buzina'},
       {id:'limpador',     label:'Limpador de Para-brisa'},
+      {id:'bancos',       label:'Bancos',                                opts:['LIMPOS','SUJOS','RASGADOS']},
       {id:'cinto',        label:'Cinto de Segurança'},
       {id:'pala_sol',     label:'Pala Interna de Proteção contra o Sol'},
       {id:'espelhos',     label:'Espelhos Retrovisores Interno e Externos'},
@@ -500,7 +521,9 @@ const SECTIONS = [
     id:'equip', icon:'⚙️', title:'EQUIPAMENTOS',
     items:[
       {id:'graxa_eq',    label:'Graxa Equipamento Vácuo',               sub:'Cruzeta, polia, cardã, mancais, rolamentos'},
-      {id:'bomba_vac',   label:'Bomba de Vácuo',                        sub:'Óleo, correia e água', foto:true},
+      {id:'tomada_forca', label:'Tomada de Força'},
+      {id:'bomba_vac',   label:'Bomba de Vácuo',                        sub:'Óleo, correia, água e retentores', foto:true},
+      {id:'bomba_hidro', label:'Bomba de Hidro'},
       {id:'depurador',   label:'Depurador do Equipamento',              sub:'Vazio e limpo?', opts:['SIM','NÃO']},
       {id:'registros',   label:'Registros de Descarte e Sucção',        sub:'Em condições / Vazando', opts:['OK','VAZA']},
       {id:'tanque',      label:'Tanque Vácuo Está Íntegro',             foto:true},
@@ -525,17 +548,6 @@ const SECTIONS = [
 
 // ─── SPLASH / MODO ────────────────────────
 function selectMode(mode) {
-  // Bloqueia retorno se não houver saída registrada do mesmo veículo hoje
-  if (mode === 'chegada') {
-    const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
-    const hoje = new Date().toISOString().slice(0, 10);
-    const saidaHoje = registros.find(r => r.modo === 'saida' && r.data_check === hoje);
-    if (!saidaHoje) {
-      showToast('⚠ Registre a SAÍDA de hoje antes do RETORNO', 'err');
-      return;
-    }
-  }
-
   MODE = mode;
 
   // Se tiver um checklist de saída salvo, associar id
@@ -561,8 +573,8 @@ function selectMode(mode) {
 
   document.getElementById('app').style.display = 'block';
 
-  // Se for retorno, pré-preencher placa/motorista da saída do dia
-  if (mode === 'chegada') {
+  // Se for retorno, pré-preencher placa/motorista da saída da placa selecionada
+  if (mode === 'chegada' && !st._placa_retorno) {
     const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
     const hoje = new Date().toISOString().slice(0, 10);
     const saidaHoje = registros.find(r => r.modo === 'saida' && r.data_check === hoje);
@@ -703,7 +715,7 @@ function setVal(itemId, val) { st[stKey(itemId)] = val; }
 
 function getTglCls(v) {
   const pos = ['OK','SIM','COMPL','LIMPO','LIMPA','LIMPAS','LIMPOS'];
-  const neg = ['FALHA','NÃO','ESTOURO','RASGADA'];
+  const neg = ['FALHA','NÃO','ESTOURO','RASGADA','RASGADOS'];
   if (pos.includes(v)) return 'ok';
   if (neg.includes(v)) return 'fail';
   return 'na';
@@ -1125,15 +1137,19 @@ function restoreFields() {
   // Data sempre automática (hoje)
   const hoje = new Date().toISOString().slice(0,10);
   sv('data-check', hoje);
-  sv('km-atual',   st._km_atual);
-  sv('km-final',   st._km_final);
-  sv('obs',        st._obs);
+  // Sempre aplicar valor do estado (inclusive vazio) para limpar campos após checklist registrado
+  const el_km = document.getElementById('km-atual');
+  if (el_km) el_km.value = st._km_atual || '';
+  const el_kmf = document.getElementById('km-final');
+  if (el_kmf) el_kmf.value = st._km_final || '';
+  const el_obs = document.getElementById('obs');
+  if (el_obs) el_obs.value = st._obs || '';
   // Placa e motorista são carregados assincronamente
 }
 
 function v(id)     { return document.getElementById(id)?.value || ''; }
 function vSel(id)  { const el = document.getElementById(id); return el ? (el.tagName === 'SELECT' ? el.options[el.selectedIndex]?.value || '' : el.value) : ''; }
-function sv(id, val) { const el = document.getElementById(id); if (el && val) el.value = val; }
+function sv(id, val) { const el = document.getElementById(id); if (el) el.value = val ?? ''; }
 
 function setupAutoSave() {
   ['km-atual','km-final','obs'].forEach(id => {
@@ -1354,19 +1370,32 @@ function clearModeData() {
   });
   if (MODE === 'saida') st.id_saida = genID('S');
   else st.id_chegada = genID('C');
-  saveState();
+  // Limpar campos de identificação para não carregar no próximo checklist
+  st._placa = '';
+  st._motorista = '';
+  st._rodizio = '';
+  st._km_atual = '';
+  st._km_final = '';
+  st._obs = '';
+  st._placa_retorno = '';
+  st._motorista_retorno = '';
+  // Persistir estado limpo imediatamente
+  try { localStorage.setItem('cl_v2', JSON.stringify(st)); } catch(e) {}
 }
 
 function buildPayload() {
+  const placaSel = vSel('placa').trim().toUpperCase();
+  const veicObj  = VEICULOS_CACHE.find(v => v.placa === placaSel);
   const payload = {
     checklist_id: MODE === 'saida' ? st.id_saida : st.id_chegada,
     modo: MODE,
     created_at: new Date().toISOString(),
-    placa: vSel('placa').trim().toUpperCase(),
+    placa: placaSel,
+    veiculo_id: veicObj ? veicObj.id : null,
     motorista: vSel('motorista').trim(),
     rodizio: v('rodizio').trim(),
     data_check: v('data-check'),
-    km_atual: v('km-atual') || null,
+    km: v('km-atual') || null,
     km_final: MODE === 'chegada' ? (v('km-final') || null) : undefined,
     observacao: v('obs').trim(),
     itens: {},
@@ -1401,20 +1430,95 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 function atualizarBotaoRetorno() {
+  // O botão de retorno agora sempre aparece ativo — a validação por placa acontece ao clicar
   const btn = document.getElementById('btn-mode-retorno');
   if (!btn) return;
+  btn.style.opacity = '1';
+  btn.style.filter = '';
+}
+
+function iniciarRetorno() {
+  const area = document.getElementById('retorno-placa-area');
+  const sel  = document.getElementById('splash-placa-retorno');
+  const msg  = document.getElementById('splash-retorno-msg');
+  const btnC = document.getElementById('btn-confirmar-retorno');
+
+  // Mostrar área de seleção de placa
+  area.style.display = 'block';
+  msg.textContent = '';
+  btnC.style.display = 'none';
+
+  // Preencher placas que tiveram saída hoje
   const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
   const hoje = new Date().toISOString().slice(0, 10);
-  const temSaida = registros.some(r => r.modo === 'saida' && r.data_check === hoje);
-  if (temSaida) {
-    btn.style.opacity = '1';
-    btn.style.filter = '';
-    btn.querySelector('.btn-desc').textContent = 'Inspeção ao\nretornar da rota';
-  } else {
-    btn.style.opacity = '0.4';
-    btn.style.filter = 'grayscale(1)';
-    btn.querySelector('.btn-desc').textContent = 'Registre a saída\nprimeiro';
+  const saidasHoje = registros.filter(r => r.modo === 'saida' && r.data_check === hoje);
+
+  // Também buscar todas as placas do Supabase (cache)
+  sel.innerHTML = '<option value="">Selecione a placa...</option>';
+
+  if (VEICULOS_CACHE.length > 0) {
+    VEICULOS_CACHE.forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v.placa;
+      opt.textContent = v.modelo ? `${v.placa} — ${v.modelo}` : v.placa;
+      sel.appendChild(opt);
+    });
+  } else if (saidasHoje.length > 0) {
+    // Fallback: só placas com saída hoje
+    saidasHoje.forEach(r => {
+      const opt = document.createElement('option');
+      opt.value = r.placa;
+      opt.textContent = r.placa;
+      sel.appendChild(opt);
+    });
   }
+
+  // Se só tem uma saída hoje, pré-selecionar
+  if (saidasHoje.length === 1) {
+    sel.value = saidasHoje[0].placa;
+    onSplashPlacaChange(sel);
+  }
+}
+
+function onSplashPlacaChange(sel) {
+  const placa = sel.value.trim().toUpperCase();
+  const msg   = document.getElementById('splash-retorno-msg');
+  const btnC  = document.getElementById('btn-confirmar-retorno');
+
+  if (!placa) { msg.textContent = ''; btnC.style.display = 'none'; return; }
+
+  const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
+  const hoje = new Date().toISOString().slice(0, 10);
+  const saida = registros.find(r => r.modo === 'saida' && r.data_check === hoje && r.placa === placa);
+
+  if (saida) {
+    msg.style.color = 'var(--ok)';
+    msg.textContent = `✓ Saída registrada — ${saida.motorista_nome || saida.motorista || ''}`;
+    btnC.style.display = 'block';
+  } else {
+    msg.style.color = 'var(--fail)';
+    msg.textContent = '✗ Nenhuma saída registrada hoje para esta placa';
+    btnC.style.display = 'none';
+  }
+}
+
+function confirmarRetorno() {
+  const placa = document.getElementById('splash-placa-retorno').value.trim().toUpperCase();
+  if (!placa) return;
+
+  const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
+  const hoje = new Date().toISOString().slice(0, 10);
+  const saida = registros.find(r => r.modo === 'saida' && r.data_check === hoje && r.placa === placa);
+  if (!saida) { showToast('⚠ Saída não encontrada para esta placa', 'err'); return; }
+
+  // Pré-preencher com dados da saída desta placa específica
+  st._placa_retorno     = saida.placa;
+  st._motorista_retorno = saida.motorista_nome || saida.motorista;
+
+  // Fechar área de seleção
+  document.getElementById('retorno-placa-area').style.display = 'none';
+
+  selectMode('chegada');
 }
 </script>
 
