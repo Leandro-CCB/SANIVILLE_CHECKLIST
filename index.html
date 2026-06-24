@@ -1515,6 +1515,23 @@ function confirmarRetorno() {
   st._placa_retorno     = saida.placa;
   st._motorista_retorno = saida.motorista_nome || saida.motorista;
 
+  // Copiar falhas da saída para o retorno (pré-preenchimento)
+  if (saida.itens) {
+    let falhasCopiadasCount = 0;
+    Object.entries(saida.itens).forEach(([itemId, obj]) => {
+      if (obj && obj.valor && isFalha(obj.valor)) {
+        if (!st[`chegada_${itemId}`]) {
+          st[`chegada_${itemId}`] = obj.valor;
+          if (obj.falha_desc) st[`chegada_${itemId}_falha`] = obj.falha_desc;
+          falhasCopiadasCount++;
+        }
+      }
+    });
+    if (falhasCopiadasCount > 0) {
+      setTimeout(() => showToast(`⚠ ${falhasCopiadasCount} falha${falhasCopiadasCount > 1 ? 's' : ''} da saída copiada${falhasCopiadasCount > 1 ? 's' : ''} — verifique se foram sanadas`, 'err'), 600);
+    }
+  }
+
   // Fechar área de seleção
   document.getElementById('retorno-placa-area').style.display = 'none';
 
