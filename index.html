@@ -387,7 +387,11 @@ input[type=file]{display:none}
       </div>
       <div>
         <div class="field-label">Data</div>
-        <input class="field-input" id="data-check" type="date" readonly style="opacity:.7;cursor:default">
+        <input class="field-input" id="data-check" type="date">
+      </div>
+      <div>
+        <div class="field-label">Hora Preenchimento</div>
+        <input class="field-input" id="hora-check" type="time" readonly style="opacity:.7;cursor:default;background:#f0f4f8">
       </div>
       <div>
         <div class="field-label" id="label-km-a">KM Atual <span class="field-required">*</span></div>
@@ -511,7 +515,7 @@ const SECTIONS = [
       {id:'tacografo',    label:'Tacógrafo e Disco do Tacógrafo',        foto:true},
       {id:'buzina',       label:'Buzina'},
       {id:'limpador',     label:'Limpador de Para-brisa'},
-      {id:'bancos',       label:'Bancos',                                opts:['LIMPOS','SUJOS','RASGADOS']},
+      {id:'bancos',       label:'Bancos',                                opts:['LIMPOS','SUJOS','RASGADO','FALHA'], noNA:true},
       {id:'cinto',        label:'Cinto de Segurança'},
       {id:'pala_sol',     label:'Pala Interna de Proteção contra o Sol'},
       {id:'espelhos',     label:'Espelhos Retrovisores Interno e Externos'},
@@ -659,7 +663,9 @@ function buildItem(item) {
     return `<button class="toggle-btn ${cls}" data-item="${item.id}" data-val="${o}" onclick="setTgl(this)">${o}</button>`;
   }).join('');
   const naCls = val === 'N/A' ? 'na' : '';
-  btns += `<button class="toggle-btn ${naCls}" data-item="${item.id}" data-val="N/A" onclick="setTgl(this)">N/A</button>`;
+  if (!item.noNA) {
+    btns += `<button class="toggle-btn ${naCls}" data-item="${item.id}" data-val="N/A" onclick="setTgl(this)">N/A</button>`;
+  }
 
   const modeColor = MODE === 'saida' ? 'rgba(245,158,11,.6)' : 'rgba(56,189,248,.6)';
   html += `
@@ -715,7 +721,7 @@ function setVal(itemId, val) { st[stKey(itemId)] = val; }
 
 function getTglCls(v) {
   const pos = ['OK','SIM','COMPL','LIMPO','LIMPA','LIMPAS','LIMPOS'];
-  const neg = ['FALHA','NÃO','ESTOURO','RASGADA','RASGADOS'];
+  const neg = ['FALHA','NÃO','ESTOURO','RASGADA','RASGADOS','RASGADO'];
   if (pos.includes(v)) return 'ok';
   if (neg.includes(v)) return 'fail';
   return 'na';
@@ -869,7 +875,8 @@ function captureFields() {
   st._placa        = vSel('placa');
   st._motorista    = vSel('motorista');
   st._rodizio      = v('rodizio');
-  st._data         = v('data-check');
+  st._data         = ''; // data não é persistida — sempre gerada ao abrir
+  st._hora         = v('hora-check');
   st._km_atual     = v('km-atual');
   st._km_final     = v('km-final');
   st._obs          = v('obs');
@@ -1134,9 +1141,14 @@ async function updateFuelAlert() {
 }
 
 function restoreFields() {
-  // Data sempre automática (hoje)
-  const hoje = new Date().toISOString().slice(0,10);
-  sv('data-check', hoje);
+  // Data padrão = hoje (editável)
+  const agora = new Date();
+  const hoje = agora.toISOString().slice(0,10);
+  sv('data-check', hoje); // sempre hoje, ignora estado salvo
+  // Hora = sempre a hora atual no momento de abrir o formulário (não editável, não restaurada do estado)
+  const horaAtual = agora.toTimeString().slice(0,5);
+  sv('hora-check', horaAtual);
+  st._hora = horaAtual; // grava já para o payload
   // Sempre aplicar valor do estado (inclusive vazio) para limpar campos após checklist registrado
   const el_km = document.getElementById('km-atual');
   if (el_km) el_km.value = st._km_atual || '';
@@ -1152,7 +1164,7 @@ function vSel(id)  { const el = document.getElementById(id); return el ? (el.tag
 function sv(id, val) { const el = document.getElementById(id); if (el) el.value = val ?? ''; }
 
 function setupAutoSave() {
-  ['km-atual','km-final','obs'].forEach(id => {
+  ['km-atual','km-final','obs','data-check'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', saveState);
   });
@@ -1196,7 +1208,7 @@ function submitChecklist() {
     const val = getVal(item.id);
     if (!val) { totalVazio++; return; }
     const pos = ['OK','SIM','COMPL','LIMPO','LIMPA','LIMPAS','LIMPOS'];
-    const neg = ['FALHA','NÃO','ESTOURO','RASGADA','VAZA','FALTA','SUJO','SUJA'];
+    const neg = ['FALHA','NÃO','ESTOURO','RASGADA','VAZA','FALTA','SUJO','SUJA','RASGADO'];
     if (neg.includes(val)) totalFalha++;
     else if (val === 'N/A') totalNa++;
     else totalOk++;
@@ -1302,7 +1314,7 @@ async function confirmSubmit() {
     const v = payload.itens[item.id]?.valor;
     if (v) {
       const pos = ['OK','SIM','COMPL','LIMPO','LIMPA','LIMPAS','LIMPOS'];
-      const neg = ['FALHA','NÃO','ESTOURO','RASGADA'];
+      const neg = ['FALHA','NÃO','ESTOURO','RASGADA','RASGADO'];
       if (neg.includes(v)) totalFalha++;
       else totalOk++;
     }
@@ -1374,6 +1386,8 @@ function clearModeData() {
   st._placa = '';
   st._motorista = '';
   st._rodizio = '';
+  st._data = '';
+  st._hora = '';
   st._km_atual = '';
   st._km_final = '';
   st._obs = '';
@@ -1395,6 +1409,7 @@ function buildPayload() {
     motorista: vSel('motorista').trim(),
     rodizio: v('rodizio').trim(),
     data_check: v('data-check'),
+    hora_check: v('hora-check'),
     km: v('km-atual') || null,
     km_final: MODE === 'chegada' ? (v('km-final') || null) : undefined,
     observacao: v('obs').trim(),
