@@ -579,12 +579,10 @@ function selectMode(mode) {
 
   // Se for retorno, pré-preencher placa/motorista da saída da placa selecionada
   if (mode === 'chegada' && !st._placa_retorno) {
-    const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
-    const hoje = new Date().toISOString().slice(0, 10);
-    const saidaHoje = registros.find(r => r.modo === 'saida' && r.data_check === hoje);
-    if (saidaHoje) {
-      st._placa_retorno     = saidaHoje.placa;
-      st._motorista_retorno = saidaHoje.motorista_nome || saidaHoje.motorista;
+    const saidaRecente = getSaidaMaisRecente();
+    if (saidaRecente) {
+      st._placa_retorno     = saidaRecente.placa;
+      st._motorista_retorno = saidaRecente.motorista_nome || saidaRecente.motorista;
     }
   }
 
@@ -1043,19 +1041,35 @@ async function getCombustivelVeiculo(placa) {
     if (!rComb.ok) return { ok:false };
     const rows = await rComb.json();
 
-    // Apenas registros com km/L já calculado e válido
-    const cheios = rows.filter(c => c.km_l && c.km_l !== '-' && !isNaN(parseFloat(c.km_l)));
-    if (!cheios.length) return { ok:true, hasData:false };
+    if (!rows.length) return { ok:true, hasData:false };
 
+    // O abastecimento mais recente é usado para "Último cheio" (data/km),
+    // MESMO que ainda não tenha km_l calculado (isso só acontece após o
+    // PRÓXIMO cheio, então o mais recente sempre viria sem km_l).
+    const maisRecente = rows[0];
+
+    // Já para a MÉDIA de consumo (km/L), aí sim só entram registros com
+    // km_l já calculado e válido.
+    const cheios = rows.filter(c => c.km_l && c.km_l !== '-' && !isNaN(parseFloat(c.km_l)));
     const ultimos = cheios.slice(0, FUEL_NUM_ABASTEC);
-    const mediaKmL = ultimos.reduce((s, c) => s + parseFloat(c.km_l), 0) / ultimos.length;
+    const mediaKmL = ultimos.length
+      ? ultimos.reduce((s, c) => s + parseFloat(c.km_l), 0) / ultimos.length
+      : null;
+
+    if (mediaKmL === null) {
+      return {
+        ok: true, hasData: true, semMedia: true,
+        kmUltimo: parseInt(maisRecente.km || 0),
+        dataUltimo: maisRecente.data || ''
+      };
+    }
 
     return {
       ok: true, hasData: true,
       mediaKmL,
       n: ultimos.length,
-      kmUltimo: parseInt(cheios[0].km || 0),
-      dataUltimo: cheios[0].data || ''
+      kmUltimo: parseInt(maisRecente.km || 0),
+      dataUltimo: maisRecente.data || ''
     };
   } catch(e) { return { ok:false }; }
 }
@@ -1124,6 +1138,12 @@ async function updateFuelAlert() {
     return;
   }
 
+  if (info.semMedia) {
+    card.className = 'fuel-alert-card neutral';
+    card.innerHTML = `⛽ Último cheio: ${info.kmUltimo.toLocaleString('pt-BR')} km · ${fmtDataBR(info.dataUltimo)} (ainda sem histórico suficiente para estimar % do tanque).`;
+    return;
+  }
+
   const litrosConsumidos = kmRodado / info.mediaKmL;
   const pct = Math.min(100, (litrosConsumidos / FUEL_TANQUE_REF_L) * 100);
 
@@ -1141,10 +1161,16 @@ async function updateFuelAlert() {
 }
 
 function restoreFields() {
-  // Data padrão = hoje (editável)
+  // Data padrão = hoje (editável). Exceção: ao iniciar um RETORNO, herda a
+  // data que foi usada/editada na SAÍDA correspondente.
   const agora = new Date();
   const hoje = agora.toISOString().slice(0,10);
-  sv('data-check', hoje); // sempre hoje, ignora estado salvo
+  if (st._data_retorno_prefill) {
+    sv('data-check', st._data_retorno_prefill);
+    st._data_retorno_prefill = null; // só se aplica uma vez, na abertura do retorno
+  } else {
+    sv('data-check', hoje);
+  }
   // Hora = sempre a hora atual no momento de abrir o formulário (não editável, não restaurada do estado)
   const horaAtual = agora.toTimeString().slice(0,5);
   sv('hora-check', horaAtual);
@@ -1444,6 +1470,19 @@ window.addEventListener('DOMContentLoaded', () => {
   atualizarBotaoRetorno();
 });
 
+// Acha a saída mais recente (por data/hora registrada, não pela data real de hoje)
+// de uma placa. Se placa for omitida, retorna a saída mais recente entre todas.
+function getSaidaMaisRecente(placa) {
+  const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
+  const lista = registros.filter(r => r.modo === 'saida' && (!placa || r.placa === placa));
+  lista.sort((a, b) => {
+    const chaveA = `${a.data_check || ''} ${a.hora_check || ''}`;
+    const chaveB = `${b.data_check || ''} ${b.hora_check || ''}`;
+    return chaveB.localeCompare(chaveA);
+  });
+  return lista[0] || null;
+}
+
 function atualizarBotaoRetorno() {
   // O botão de retorno agora sempre aparece ativo — a validação por placa acontece ao clicar
   const btn = document.getElementById('btn-mode-retorno');
@@ -1463,10 +1502,17 @@ function iniciarRetorno() {
   msg.textContent = '';
   btnC.style.display = 'none';
 
-  // Preencher placas que tiveram saída hoje
+  // Preencher placas com saída em aberto (a mais recente registrada de cada uma,
+  // independente da data real de hoje — respeita datas editadas manualmente)
   const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
-  const hoje = new Date().toISOString().slice(0, 10);
-  const saidasHoje = registros.filter(r => r.modo === 'saida' && r.data_check === hoje);
+  const saidasPorPlaca = {};
+  registros.filter(r => r.modo === 'saida').forEach(r => {
+    const chave = `${r.data_check || ''} ${r.hora_check || ''}`;
+    if (!saidasPorPlaca[r.placa] || chave > `${saidasPorPlaca[r.placa].data_check || ''} ${saidasPorPlaca[r.placa].hora_check || ''}`) {
+      saidasPorPlaca[r.placa] = r;
+    }
+  });
+  const saidasRecentes = Object.values(saidasPorPlaca);
 
   // Também buscar todas as placas do Supabase (cache)
   sel.innerHTML = '<option value="">Selecione a placa...</option>';
@@ -1478,9 +1524,9 @@ function iniciarRetorno() {
       opt.textContent = v.modelo ? `${v.placa} — ${v.modelo}` : v.placa;
       sel.appendChild(opt);
     });
-  } else if (saidasHoje.length > 0) {
-    // Fallback: só placas com saída hoje
-    saidasHoje.forEach(r => {
+  } else if (saidasRecentes.length > 0) {
+    // Fallback: só placas com saída registrada
+    saidasRecentes.forEach(r => {
       const opt = document.createElement('option');
       opt.value = r.placa;
       opt.textContent = r.placa;
@@ -1488,9 +1534,9 @@ function iniciarRetorno() {
     });
   }
 
-  // Se só tem uma saída hoje, pré-selecionar
-  if (saidasHoje.length === 1) {
-    sel.value = saidasHoje[0].placa;
+  // Se só tem uma saída em aberto, pré-selecionar
+  if (saidasRecentes.length === 1) {
+    sel.value = saidasRecentes[0].placa;
     onSplashPlacaChange(sel);
   }
 }
@@ -1502,17 +1548,15 @@ function onSplashPlacaChange(sel) {
 
   if (!placa) { msg.textContent = ''; btnC.style.display = 'none'; return; }
 
-  const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
-  const hoje = new Date().toISOString().slice(0, 10);
-  const saida = registros.find(r => r.modo === 'saida' && r.data_check === hoje && r.placa === placa);
+  const saida = getSaidaMaisRecente(placa);
 
   if (saida) {
     msg.style.color = 'var(--ok)';
-    msg.textContent = `✓ Saída registrada — ${saida.motorista_nome || saida.motorista || ''}`;
+    msg.textContent = `✓ Saída registrada em ${fmtDataBR(saida.data_check)} — ${saida.motorista_nome || saida.motorista || ''}`;
     btnC.style.display = 'block';
   } else {
     msg.style.color = 'var(--fail)';
-    msg.textContent = '✗ Nenhuma saída registrada hoje para esta placa';
+    msg.textContent = '✗ Nenhuma saída registrada para esta placa';
     btnC.style.display = 'none';
   }
 }
@@ -1521,14 +1565,14 @@ function confirmarRetorno() {
   const placa = document.getElementById('splash-placa-retorno').value.trim().toUpperCase();
   if (!placa) return;
 
-  const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
-  const hoje = new Date().toISOString().slice(0, 10);
-  const saida = registros.find(r => r.modo === 'saida' && r.data_check === hoje && r.placa === placa);
+  const saida = getSaidaMaisRecente(placa);
   if (!saida) { showToast('⚠ Saída não encontrada para esta placa', 'err'); return; }
 
   // Pré-preencher com dados da saída desta placa específica
   st._placa_retorno     = saida.placa;
   st._motorista_retorno = saida.motorista_nome || saida.motorista;
+  // Puxa a mesma data que foi usada (inclusive se editada manualmente) na saída
+  st._data_retorno_prefill = saida.data_check || '';
 
   // Copiar falhas da saída para o retorno (pré-preenchimento)
   if (saida.itens) {
