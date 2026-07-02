@@ -294,6 +294,7 @@ input[type=file]{display:none}
 .toast.ok{border-color:var(--ok);color:#a8f0c6}
 .toast.err{border-color:var(--fail);color:#ffa8af}
 .toast.info{border-color:var(--chegada);color:#a8f0c6}
+.toast.warn{border-color:#f0ad4e;color:#ffe0a8}
 </style>
 </head>
 <body>
@@ -436,6 +437,16 @@ input[type=file]{display:none}
 
 <!-- TOAST -->
 <div class="toast" id="toast"></div>
+
+<!-- ── AVISO DE SINCRONIZAÇÃO PENDENTE ─────── -->
+<div id="sync-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:800;background:#fff8e6;border-bottom:3px solid #f0ad4e;box-shadow:0 4px 20px rgba(0,0,0,.12);padding:10px 14px;align-items:center;gap:10px;font-family:'Barlow','Segoe UI',sans-serif;">
+  <span style="font-size:20px;flex-shrink:0">☁️</span>
+  <div style="flex:1;min-width:0">
+    <div style="font-weight:700;font-size:12.5px;color:#8a6116" id="sync-banner-title">pendente de sincronização</div>
+    <div style="font-size:10.5px;color:#a3792f" id="sync-banner-sub">Será enviado automaticamente quando houver internet</div>
+  </div>
+  <button id="sync-banner-btn" onclick="syncPendingChecklists(false)" style="background:#f0ad4e;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:.3px;flex-shrink:0;white-space:nowrap">SINCRONIZAR</button>
+</div>
 
 <!-- ── PWA INSTALL BANNER ──────────────────── -->
 <div id="pwa-banner" style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:700;background:#fff;border-top:3px solid #0d6efd;box-shadow:0 -4px 24px rgba(0,0,0,.15);padding:14px 16px;align-items:center;gap:12px;font-family:'Barlow','Segoe UI',sans-serif;">
@@ -616,6 +627,112 @@ function checkSupabase() {
     lbl.textContent = 'Supabase conectado · ' + SUPABASE_URL.replace('https://','');
   }
 }
+
+// ─── FILA DE SINCRONIZAÇÃO PENDENTE ───────
+// Checklists que não conseguiram ser enviados (sem internet / erro) ficam guardados
+// aqui (com fotos incluídas em base64) até serem sincronizados com sucesso.
+const PENDING_KEY = 'cl_pending_sync';
+
+function gerarUID() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return 'p_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+}
+
+function getPendingQueue() {
+  try { return JSON.parse(localStorage.getItem(PENDING_KEY) || '[]'); }
+  catch(e) { return []; }
+}
+function savePendingQueue(arr) {
+  try { localStorage.setItem(PENDING_KEY, JSON.stringify(arr)); }
+  catch(e) { console.error('Erro ao salvar fila de sincronização (armazenamento cheio?):', e); }
+  atualizarIndicadorPendencia();
+}
+function addToPendingQueue(entry) {
+  const arr = getPendingQueue();
+  arr.push(entry);
+  savePendingQueue(arr);
+}
+function removeFromPendingQueue(uid) {
+  savePendingQueue(getPendingQueue().filter(e => e.uid !== uid));
+}
+
+// Atualiza o banner fixo que avisa quantos checklists estão pendentes
+function atualizarIndicadorPendencia(sincronizando = false) {
+  const banner = document.getElementById('sync-banner');
+  const title  = document.getElementById('sync-banner-title');
+  const sub    = document.getElementById('sync-banner-sub');
+  const btn    = document.getElementById('sync-banner-btn');
+  if (!banner) return;
+  const fila = getPendingQueue();
+  if (fila.length === 0) {
+    banner.style.display = 'none';
+    return;
+  }
+  banner.style.display = 'flex';
+  if (sincronizando) {
+    title.textContent = 'Sincronizando com a nuvem...';
+    sub.textContent = 'Aguarde um instante';
+    btn.disabled = true;
+    btn.style.opacity = '.6';
+    btn.textContent = '...';
+  } else {
+    const n = fila.length;
+    title.textContent = `${n} checklist${n > 1 ? 's' : ''} não enviado${n > 1 ? 's' : ''} para a nuvem`;
+    sub.textContent = navigator.onLine
+      ? 'Toque para tentar sincronizar agora'
+      : 'Sem internet · será enviado assim que reconectar';
+    btn.disabled = false;
+    btn.style.opacity = '1';
+    btn.textContent = 'SINCRONIZAR';
+  }
+}
+
+// Percorre a fila e tenta reenviar cada checklist pendente.
+// silencioso=true evita toasts quando é uma tentativa automática (ex: ao reconectar)
+let _syncEmAndamento = false;
+async function syncPendingChecklists(silencioso = false) {
+  if (_syncEmAndamento) return;
+  if (!SUPABASE_URL || !SUPABASE_ANON) return;
+  if (!navigator.onLine) {
+    if (!silencioso) showToast('Sem internet no momento', 'warn');
+    return;
+  }
+  const fila = getPendingQueue();
+  if (fila.length === 0) {
+    if (!silencioso) showToast('Nada pendente para sincronizar', 'ok');
+    return;
+  }
+
+  _syncEmAndamento = true;
+  atualizarIndicadorPendencia(true);
+
+  let sucesso = 0, falha = 0;
+  for (const item of fila) {
+    const ok = await tentarEnviarChecklist(item.payload, item.fotos, item.totalOk, item.totalFalha, item.totalItens);
+    if (ok) {
+      removeFromPendingQueue(item.uid);
+      marcarRegistroComoSincronizado(item.checklist_id);
+      sucesso++;
+    } else {
+      const arr = getPendingQueue();
+      const idx = arr.findIndex(e => e.uid === item.uid);
+      if (idx > -1) { arr[idx].tentativas = (arr[idx].tentativas || 0) + 1; savePendingQueue(arr); }
+      falha++;
+    }
+  }
+
+  _syncEmAndamento = false;
+  atualizarIndicadorPendencia();
+
+  if (sucesso > 0 && falha === 0) showToast(`✓ ${sucesso} checklist${sucesso > 1 ? 's' : ''} sincronizado${sucesso > 1 ? 's' : ''}!`, 'ok');
+  else if (sucesso > 0 && falha > 0) showToast(`✓ ${sucesso} sincronizado(s) · ${falha} ainda pendente(s)`, 'ok');
+  else if (falha > 0 && !silencioso) showToast(`Ainda sem conexão com a nuvem · ${falha} pendente(s)`, 'warn');
+}
+
+// Auto-sincroniza assim que a internet voltar
+window.addEventListener('online', () => syncPendingChecklists(true));
+// Tenta de tempos em tempos também (rede pode "voltar" sem disparar o evento 'online' em alguns celulares)
+setInterval(() => syncPendingChecklists(true), 45000);
 
 // ─── RENDER ───────────────────────────────
 function renderSections() {
@@ -1293,13 +1410,12 @@ function dataURLtoBlob(dataUrl) {
   return new Blob([arr], { type: mime });
 }
 
-// Faz upload de todas as fotos do MODE atual para o Storage do Supabase.
-// Retorna um objeto { [itemId]: [ 'checklist-fotos/path1', ... ] }
-async function uploadFotosChecklist(checklistId) {
+// Faz upload de uma lista de fotos para o Storage do Supabase.
+// fotosList: [{itemId, ts, base64}]. Retorna { [itemId]: [ 'path1', ... ] }
+async function uploadFotosChecklistFromList(checklistId, fotosList) {
   const SB_STORAGE = `${SUPABASE_URL}/storage/v1/object`;
   const result = {};
-  const entries = Object.entries(st.fotos).filter(([key, f]) => f.mode === MODE);
-  for (const [key, f] of entries) {
+  for (const f of (fotosList || [])) {
     try {
       const blob = dataURLtoBlob(f.base64);
       const ext = blob.type.includes('webp') ? 'webp' : 'jpg';
@@ -1320,19 +1436,67 @@ async function uploadFotosChecklist(checklistId) {
   return result;
 }
 
+// Tenta enviar um checklist (fotos + registro) para o Supabase agora mesmo.
+// Retorna true se enviou com sucesso, false se falhou (fica pendente de sincronização).
+async function tentarEnviarChecklist(payload, fotosList, totalOk, totalFalha, totalItens) {
+  if (!SUPABASE_URL || !SUPABASE_ANON) return true; // Supabase não configurado: nada a sincronizar
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return false; // sabidamente offline
+
+  try {
+    const fotosPorItem = await uploadFotosChecklistFromList(payload.checklist_id, fotosList);
+    const itensComFotos = { ...payload.itens };
+    Object.entries(fotosPorItem).forEach(([itemId, paths]) => {
+      if (itensComFotos[itemId]) itensComFotos[itemId] = { ...itensComFotos[itemId], fotos: paths };
+    });
+
+    const sbPayload = {
+      ...payload,
+      itens: itensComFotos,
+      id: payload.checklist_id,
+      total_ok: totalOk,
+      total_falha: totalFalha,
+      total_itens: totalItens
+    };
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_CHECKLIST}`, {
+      method: 'POST',
+      headers: { ...SB_HEADERS, 'Prefer': 'return=minimal' },
+      body: JSON.stringify(sbPayload)
+    });
+    if (!r.ok) console.error('Erro Supabase:', await r.text());
+    return r.ok;
+  } catch(e) {
+    console.error('Falha ao enviar checklist (offline/erro de rede):', e);
+    return false;
+  }
+}
+
+// Salva/atualiza o registro local usado pelo Gestão de Frota
+function salvarRegistroLocal(registro) {
+  try {
+    const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
+    registros.unshift(registro);
+    localStorage.setItem('cl_checklists', JSON.stringify(registros));
+  } catch(e) { console.error(e); }
+}
+function marcarRegistroComoSincronizado(checklistId) {
+  try {
+    const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
+    const idx = registros.findIndex(r => r.id === checklistId);
+    if (idx > -1) {
+      registros[idx]._sync_pendente = false;
+      localStorage.setItem('cl_checklists', JSON.stringify(registros));
+    }
+  } catch(e) { console.error(e); }
+}
+
 async function confirmSubmit() {
   closeModal();
   const payload = buildPayload();
 
-  // Envia fotos para o Storage e anexa os caminhos a cada item
-  if (SUPABASE_URL && SUPABASE_ANON) {
-    try {
-      const fotosPorItem = await uploadFotosChecklist(payload.checklist_id);
-      Object.entries(fotosPorItem).forEach(([itemId, paths]) => {
-        if (payload.itens[itemId]) payload.itens[itemId].fotos = paths;
-      });
-    } catch(e) { console.error('Falha ao enviar fotos:', e); }
-  }
+  // Captura as fotos do modo atual (para o caso de precisar entrar na fila de sincronização)
+  const fotosAtuais = Object.values(st.fotos)
+    .filter(f => f.mode === MODE)
+    .map(f => ({ itemId: f.itemId, ts: f.ts, base64: f.base64 }));
 
   // Conta itens OK e falhas para o resumo no Gestão de Frota
   let totalOk = 0, totalFalha = 0;
@@ -1345,56 +1509,42 @@ async function confirmSubmit() {
       else totalOk++;
     }
   }));
+  const totalItens = SECTIONS.reduce((s, sec) => s + sec.items.length, 0);
 
-  // Salva registro finalizado no localStorage compartilhado com o Gestão de Frota
-  try {
-    const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
-    registros.unshift({
-      ...payload,
-      id: payload.checklist_id,
-      motorista_nome: vSel('motorista').trim(),
-      total_ok: totalOk,
-      total_falha: totalFalha,
-      total_itens: SECTIONS.reduce((s, sec) => s + sec.items.length, 0),
+  // Salva SEMPRE localmente primeiro — nada se perde, mesmo sem internet
+  salvarRegistroLocal({
+    ...payload,
+    id: payload.checklist_id,
+    motorista_nome: vSel('motorista').trim(),
+    total_ok: totalOk,
+    total_falha: totalFalha,
+    total_itens: totalItens,
+    _sync_pendente: true
+  });
+
+  // Tenta enviar agora. Se não der (sem internet ou erro), entra na fila de sincronização.
+  const enviouAgora = await tentarEnviarChecklist(payload, fotosAtuais, totalOk, totalFalha, totalItens);
+
+  if (enviouAgora) {
+    marcarRegistroComoSincronizado(payload.checklist_id);
+    showToast('✓ Enviado com sucesso!', 'ok');
+  } else if (SUPABASE_URL && SUPABASE_ANON) {
+    addToPendingQueue({
+      uid: gerarUID(),
+      checklist_id: payload.checklist_id,
+      payload,
+      fotos: fotosAtuais,
+      totalOk, totalFalha, totalItens,
+      criado_em: new Date().toISOString(),
+      tentativas: 0
     });
-    localStorage.setItem('cl_checklists', JSON.stringify(registros));
-  } catch(e) {}
-
-  if (SUPABASE_URL && SUPABASE_ANON) {
-    try {
-      const sbPayload = {
-        ...payload,
-        id: payload.checklist_id,
-        total_ok: totalOk,
-        total_falha: totalFalha,
-        total_itens: SECTIONS.reduce((s, sec) => s + sec.items.length, 0)
-      };
-      const r = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_CHECKLIST}`, {
-        method: 'POST',
-        headers: { ...SB_HEADERS, 'Prefer': 'return=minimal' },
-        body: JSON.stringify(sbPayload)
-      });
-      if (r.ok) {
-        showToast('✓ Enviado com sucesso!', 'ok');
-        clearModeData();
-        setTimeout(() => voltarSplash(), 1800);
-      } else {
-        console.error(await r.text());
-        showToast('✓ Salvo localmente · Erro ao enviar Supabase', 'ok');
-        clearModeData();
-        setTimeout(() => voltarSplash(), 1800);
-      }
-    } catch(e) {
-      console.error(e);
-      showToast('✓ Salvo localmente · Sem conexão', 'ok');
-      clearModeData();
-      setTimeout(() => voltarSplash(), 1800);
-    }
+    showToast('☁️ Salvo no aparelho · pendente de sincronização', 'warn');
   } else {
     showToast('✓ Checklist registrado!', 'ok');
-    clearModeData();
-    setTimeout(() => voltarSplash(), 1800);
   }
+
+  clearModeData();
+  setTimeout(() => voltarSplash(), 1800);
 }
 
 function clearModeData() {
@@ -1468,6 +1618,8 @@ function showToast(msg, type='') {
 window.addEventListener('DOMContentLoaded', () => {
   loadState(); // carrega dados salvos antes de exibir splash
   atualizarBotaoRetorno();
+  atualizarIndicadorPendencia();
+  syncPendingChecklists(true); // tenta sincronizar pendências assim que o app abre, se já houver internet
 });
 
 // Acha a saída mais recente (por data/hora registrada, não pela data real de hoje)
