@@ -1726,20 +1726,39 @@ function confirmarRetorno() {
   // Puxa a mesma data que foi usada (inclusive se editada manualmente) na saída
   st._data_retorno_prefill = saida.data_check || '';
 
-  // Copiar falhas da saída para o retorno (pré-preenchimento)
+  // Copiar TODAS as respostas da saída para o retorno (pré-preenchimento),
+  // independente de ser falha, ok, limpo, etc. Inclui os campos extras
+  // (quantidade, metros, vencimento, etc.) associados a cada item.
   if (saida.itens) {
-    let falhasCopiadasCount = 0;
+    // Mapa itemId -> definição do item (para saber o nome do campo "extra")
+    const itemDefById = {};
+    SECTIONS.forEach(sec => sec.items.forEach(item => { itemDefById[item.id] = item; }));
+
+    let extrasCopiadosCount = 0, falhasCopiadasCount = 0;
     Object.entries(saida.itens).forEach(([itemId, obj]) => {
-      if (obj && obj.valor && isFalha(obj.valor)) {
-        if (!st[`chegada_${itemId}`]) {
-          st[`chegada_${itemId}`] = obj.valor;
-          if (obj.falha_desc) st[`chegada_${itemId}_falha`] = obj.falha_desc;
-          falhasCopiadasCount++;
-        }
+      if (!obj || !obj.valor) return;
+
+      // Status (OK/LIMPO/etc.) só é copiado quando for falha — o operador
+      // do retorno precisa confirmar de novo os itens que estavam OK.
+      if (isFalha(obj.valor) && !st[`chegada_${itemId}`]) {
+        st[`chegada_${itemId}`] = obj.valor;
+        if (obj.falha_desc) st[`chegada_${itemId}_falha`] = obj.falha_desc;
+        falhasCopiadasCount++;
+      }
+
+      // Campos de detalhe (quantidade, metros, vencimento etc.) sempre são
+      // copiados, independente do status ter sido OK, falha, limpo etc.
+      const itemDef = itemDefById[itemId];
+      if (itemDef && itemDef.extra && obj[itemDef.extra] != null && !st[`chegada_${itemDef.extra}`]) {
+        st[`chegada_${itemDef.extra}`] = obj[itemDef.extra];
+        extrasCopiadosCount++;
       }
     });
+
     if (falhasCopiadasCount > 0) {
       setTimeout(() => showToast(`⚠ ${falhasCopiadasCount} falha${falhasCopiadasCount > 1 ? 's' : ''} da saída copiada${falhasCopiadasCount > 1 ? 's' : ''} — verifique se foram sanadas`, 'err'), 600);
+    } else if (extrasCopiadosCount > 0) {
+      setTimeout(() => showToast(`✓ ${extrasCopiadosCount} campo${extrasCopiadosCount > 1 ? 's' : ''} de detalhe copiado${extrasCopiadosCount > 1 ? 's' : ''} da saída`, 'ok'), 600);
     }
   }
 
