@@ -397,6 +397,7 @@ input[type=file]{display:none}
       <div>
         <div class="field-label" id="label-km-a">KM Atual <span class="field-required">*</span></div>
         <input class="field-input" id="km-atual" type="number" placeholder="000000">
+        <div class="rodizio-info sem-placa" id="ultimo-km-badge">—</div>
       </div>
       <div id="campo-km-final" style="display:none">
         <div class="field-label">KM Final <span class="field-required">*</span></div>
@@ -1092,12 +1093,39 @@ const RODIZIO_MAP = {
   '0': { dia: 'Sexta-feira',   sigla: 'SEX', diasSemana: [5] },
 };
 
+// ─── BADGE DE ÚLTIMO KM REGISTRADO ────────
+// Mostra, assim que o veículo é selecionado, o maior KM já conhecido para ele
+// (cadastro do veículo + histórico de checklists), como referência para o motorista.
+let _ultimoKmReqId = 0;
+async function updateUltimoKmBadge(placa) {
+  const badge = document.getElementById('ultimo-km-badge');
+  if (!badge) return;
+  if (!placa) { badge.className = 'rodizio-info sem-placa'; return; }
+
+  const myReq = ++_ultimoKmReqId;
+  badge.className = 'rodizio-info normal';
+  badge.innerHTML = '🔎 Buscando último KM registrado...';
+
+  const ultimoKm = await getUltimoKmVeiculo(placa);
+  if (myReq !== _ultimoKmReqId) return; // resposta antiga, descarta
+
+  if (ultimoKm > 0) {
+    badge.className = 'rodizio-info normal';
+    badge.innerHTML = `📍 Último KM registrado: <strong>${ultimoKm.toLocaleString('pt-BR')} km</strong>`;
+  } else {
+    badge.className = 'rodizio-info normal';
+    badge.innerHTML = '📍 Nenhum KM anterior registrado para este veículo.';
+  }
+}
+
 function onVeiculoChange(sel) {
   const placa = sel.value;
   if (!placa) {
     document.getElementById('rodizio').value = '';
     const badge = document.getElementById('rodizio-badge');
     badge.className = 'rodizio-info sem-placa';
+    const kmBadge = document.getElementById('ultimo-km-badge');
+    if (kmBadge) kmBadge.className = 'rodizio-info sem-placa';
     return;
   }
   // Pega o último dígito numérico da placa (padrão Mercosul ou antigo)
@@ -1128,6 +1156,7 @@ function onVeiculoChange(sel) {
   }
   saveState();
   updateFuelAlert();
+  updateUltimoKmBadge(placa);
 }
 
 // ─── ALERTA DE COMBUSTÍVEL (dados direto do Supabase) ─────
@@ -1195,6 +1224,33 @@ function fmtDataBR(iso) {
   if (!iso) return '';
   const [y, m, d] = iso.split('-');
   return (d && m && y) ? `${d}/${m}/${y}` : iso;
+}
+
+// Busca o maior KM já registrado para o veículo (cadastro do veículo + histórico de checklists)
+// Usado como trava para impedir lançar um hodômetro menor que o último conhecido.
+async function getUltimoKmVeiculo(placa) {
+  try {
+    const [rVei, rCl] = await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/${TABLE_VEICULOS}?select=km&placa=eq.${encodeURIComponent(placa)}`, { headers: SB_HEADERS }),
+      fetch(`${SUPABASE_URL}/rest/v1/${TABLE_CHECKLIST}?select=km,km_atual,km_final&placa=eq.${encodeURIComponent(placa)}&order=created_at.desc&limit=15`, { headers: SB_HEADERS })
+    ]);
+    let maxKm = 0;
+    if (rVei.ok) {
+      const veis = await rVei.json();
+      const n = parseInt(veis[0]?.km || 0);
+      if (!isNaN(n) && n > maxKm) maxKm = n;
+    }
+    if (rCl.ok) {
+      const rows = await rCl.json();
+      rows.forEach(r => {
+        [r.km, r.km_atual, r.km_final].forEach(val => {
+          const n = parseInt(val || 0);
+          if (!isNaN(n) && n > maxKm) maxKm = n;
+        });
+      });
+    }
+    return maxKm;
+  } catch(e) { return 0; }
 }
 
 // Evita disparar uma consulta ao Supabase a cada tecla digitada no hodômetro
@@ -1321,7 +1377,7 @@ function setupAutoSave() {
 }
 
 // ─── SUBMIT ───────────────────────────────
-function submitChecklist() {
+async function submitChecklist() {
   const placa = vSel('placa').trim();
   const mot   = vSel('motorista').trim();
   if (!placa || !mot) { showToast('⚠ Preencha Placa e Motorista', 'err'); return; }
@@ -1344,6 +1400,39 @@ function submitChecklist() {
       showToast('⚠ Informe o KM Final — campo obrigatório', 'err');
       return;
     }
+  }
+
+  // Trava de hodômetro: não permite lançar um KM menor que o último já registrado para o veículo
+  const kmAtualNum = parseInt(v('km-atual') || 0);
+  const kmFinalNum = MODE === 'chegada' ? parseInt(v('km-final') || 0) : null;
+
+  // Na chegada, o KM final não pode ser menor que o KM de saída informado no mesmo formulário
+  if (MODE === 'chegada' && kmFinalNum < kmAtualNum) {
+    const kmFinalEl = document.getElementById('km-final');
+    kmFinalEl.classList.add('field-invalid');
+    kmFinalEl.scrollIntoView({ behavior:'smooth', block:'center' });
+    kmFinalEl.focus();
+    showToast(`⚠ KM Final (${kmFinalNum.toLocaleString('pt-BR')} km) não pode ser menor que o KM de Saída (${kmAtualNum.toLocaleString('pt-BR')} km)`, 'err');
+    return;
+  }
+
+  const btnSubmit = document.getElementById('btn-submit');
+  const textoOriginalBtn = btnSubmit ? btnSubmit.textContent : '';
+  let ultimoKm = 0;
+  if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+    if (btnSubmit) { btnSubmit.disabled = true; btnSubmit.textContent = '⏳ Verificando hodômetro...'; }
+    ultimoKm = await getUltimoKmVeiculo(placa);
+    if (btnSubmit) { btnSubmit.disabled = false; btnSubmit.textContent = textoOriginalBtn; }
+  }
+
+  const kmParaChecar = MODE === 'chegada' ? kmFinalNum : kmAtualNum;
+  if (ultimoKm > 0 && kmParaChecar < ultimoKm) {
+    const elInvalido = MODE === 'chegada' ? document.getElementById('km-final') : kmAtualEl;
+    elInvalido.classList.add('field-invalid');
+    elInvalido.scrollIntoView({ behavior:'smooth', block:'center' });
+    elInvalido.focus();
+    showToast(`⚠ Hodômetro (${kmParaChecar.toLocaleString('pt-BR')} km) menor que o último registrado para este veículo (${ultimoKm.toLocaleString('pt-BR')} km). Verifique o valor.`, 'err');
+    return;
   }
 
   let totalOk = 0, totalFalha = 0, totalNa = 0, totalVazio = 0;
