@@ -1742,23 +1742,29 @@ function getSaidaMaisRecente(placa) {
 // Retorna null se não foi possível consultar (offline/erro) — quem chamar
 // deve então usar o fallback local.
 async function buscarSaidasEmAbertoSupabase() {
-  if (!SUPABASE_URL || !SUPABASE_ANON) return null;
+  if (!SUPABASE_URL || !SUPABASE_ANON) { console.warn('[Retorno] Supabase não configurado'); return null; }
   try {
     const r = await fetch(
       `${SUPABASE_URL}/rest/v1/${TABLE_CHECKLIST}?select=*&order=created_at.desc&limit=300`,
       { headers: SB_HEADERS }
     );
-    if (!r.ok) return null;
+    if (!r.ok) {
+      console.error('[Retorno] Falha ao consultar Supabase:', r.status, await r.text());
+      return null;
+    }
     const registros = await r.json();
+    console.log('[Retorno] Registros recebidos do Supabase:', registros.length);
     const ultimoPorPlaca = {};
     registros.forEach(r => {
       // já vem ordenado do mais recente pro mais antigo, então o primeiro
       // registro visto para cada placa é o mais recente
       if (!ultimoPorPlaca[r.placa]) ultimoPorPlaca[r.placa] = r;
     });
-    return Object.values(ultimoPorPlaca).filter(r => r.modo === 'saida');
+    const abertas = Object.values(ultimoPorPlaca).filter(r => r.modo === 'saida');
+    console.log('[Retorno] Placas com saída em aberto:', abertas.map(r => r.placa));
+    return abertas;
   } catch (e) {
-    console.error('Falha ao buscar saídas em aberto do Supabase:', e);
+    console.error('[Retorno] Falha ao buscar saídas em aberto do Supabase (rede/CORS):', e);
     return null;
   }
 }
