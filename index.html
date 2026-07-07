@@ -1744,36 +1744,36 @@ function iniciarRetorno() {
   msg.textContent = '';
   btnC.style.display = 'none';
 
-  // Preencher placas com saída em aberto (a mais recente registrada de cada uma,
-  // independente da data real de hoje — respeita datas editadas manualmente)
+  // Preencher placas com saída EM ABERTO de verdade: para cada placa, olha o
+  // registro mais recente (saída OU chegada) — só entra na lista se o último
+  // evento daquela placa for uma 'saida' (ou seja, ainda não retornou).
   const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
-  const saidasPorPlaca = {};
-  registros.filter(r => r.modo === 'saida').forEach(r => {
+  const ultimoPorPlaca = {};
+  registros.forEach(r => {
     const chave = `${r.data_check || ''} ${r.hora_check || ''}`;
-    if (!saidasPorPlaca[r.placa] || chave > `${saidasPorPlaca[r.placa].data_check || ''} ${saidasPorPlaca[r.placa].hora_check || ''}`) {
-      saidasPorPlaca[r.placa] = r;
+    const atual = ultimoPorPlaca[r.placa];
+    if (!atual || chave >= `${atual.data_check || ''} ${atual.hora_check || ''}`) {
+      ultimoPorPlaca[r.placa] = r;
     }
   });
-  const saidasRecentes = Object.values(saidasPorPlaca);
+  const saidasRecentes = Object.values(ultimoPorPlaca).filter(r => r.modo === 'saida');
 
-  // Também buscar todas as placas do Supabase (cache)
+  // Preencher o dropdown apenas com essas placas em aberto, usando o
+  // modelo do cadastro (VEICULOS_CACHE) quando disponível para exibição.
   sel.innerHTML = '<option value="">Selecione a placa...</option>';
 
-  if (VEICULOS_CACHE.length > 0) {
-    VEICULOS_CACHE.forEach(v => {
-      const opt = document.createElement('option');
-      opt.value = v.placa;
-      opt.textContent = v.modelo ? `${v.placa} — ${v.modelo}` : v.placa;
-      sel.appendChild(opt);
-    });
-  } else if (saidasRecentes.length > 0) {
-    // Fallback: só placas com saída registrada
-    saidasRecentes.forEach(r => {
-      const opt = document.createElement('option');
-      opt.value = r.placa;
-      opt.textContent = r.placa;
-      sel.appendChild(opt);
-    });
+  if (saidasRecentes.length > 0) {
+    saidasRecentes
+      .sort((a, b) => a.placa.localeCompare(b.placa))
+      .forEach(r => {
+        const veic = VEICULOS_CACHE.find(v => v.placa === r.placa);
+        const opt = document.createElement('option');
+        opt.value = r.placa;
+        opt.textContent = veic && veic.modelo ? `${r.placa} — ${veic.modelo}` : r.placa;
+        sel.appendChild(opt);
+      });
+  } else {
+    sel.innerHTML = '<option value="">Nenhuma saída em aberto</option>';
   }
 
   // Se só tem uma saída em aberto, pré-selecionar
