@@ -2,7 +2,7 @@
 // SERVICE WORKER — Check List Veículos Pesados
 // ═══════════════════════════════════════════
 
-const CACHE_NAME  = 'checklist-v3';
+const CACHE_NAME  = 'checklist-v4';
 const PRECACHE    = ['/', '/index.html', '/manifest.json', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 // ── INSTALL ─────────────────────────────────
