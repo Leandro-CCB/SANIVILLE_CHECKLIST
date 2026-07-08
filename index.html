@@ -525,7 +525,7 @@ const SECTIONS = [
       {id:'vidros_el',    label:'Vidros Elétricos'},
       {id:'velocimetro',  label:'Velocímetro'},
       {id:'tacografo',    label:'Tacógrafo e Disco do Tacógrafo',        foto:true},
-      {id:'buzina',       label:'Buzina'},
+      {id:'buzina',       label:'Buzina / Sirene de Ré'},
       {id:'limpador',     label:'Limpador de Para-brisa'},
       {id:'bancos',       label:'Bancos',                                opts:['LIMPOS','SUJOS','RASGADO','FALHA'], noNA:true},
       {id:'cinto',        label:'Cinto de Segurança'},
@@ -541,7 +541,7 @@ const SECTIONS = [
       {id:'bomba_vac',   label:'Bomba de Vácuo',                        sub:'Óleo, correia, água e retentores', foto:true},
       {id:'bomba_hidro', label:'Bomba de Hidro'},
       {id:'depurador',   label:'Depurador do Equipamento',              sub:'Vazio e limpo?', opts:['SIM','NÃO']},
-      {id:'registros',   label:'Registros de Descarte e Sucção',        sub:'Em condições / Vazando', opts:['OK','VAZA']},
+      {id:'registros',   label:'Registros de Descarte e Sucção',        sub:'Em condições / Vazando', opts:['OK','FALHA']},
       {id:'tanque',      label:'Tanque Vácuo Está Íntegro',             foto:true},
       {id:'mangueira',   label:'Quantidade de Mangueiras',              sub:'Avisar no grupo', extra:'mangueira_mts', extraLabel:'Qtd (metros)'},
       {id:'plac_risco',  label:'Placas de Risco Químico',               sub:'Indicar quantidade', opts:['LIMPAS','SUJAS'], extra:'placas_qtd', extraLabel:'Quantidade'},
@@ -1714,19 +1714,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
 // Acha a saída mais recente (por data/hora registrada, não pela data real de hoje)
 // de uma placa. Se placa for omitida, retorna a saída mais recente entre todas.
-// Cache das saídas em aberto buscadas do Supabase na última vez que a tela
-// de retorno foi aberta — permite que o retorno funcione em qualquer
-// aparelho, mesmo que a saída tenha sido registrada em outro dispositivo.
-let SAIDAS_ABERTAS_CACHE = [];
-
 function getSaidaMaisRecente(placa) {
-  // 1º — procura no cache vindo do Supabase (cobre saídas feitas em outro aparelho)
-  if (placa) {
-    const doCache = SAIDAS_ABERTAS_CACHE.find(r => r.placa === placa);
-    if (doCache) return doCache;
-  }
-
-  // 2º — fallback: procura no localStorage deste aparelho (uso offline)
   const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
   const lista = registros.filter(r => r.modo === 'saida' && (!placa || r.placa === placa));
   lista.sort((a, b) => {
@@ -1737,38 +1725,6 @@ function getSaidaMaisRecente(placa) {
   return lista[0] || null;
 }
 
-// Busca no Supabase, para cada placa, o registro mais recente (saída ou
-// chegada). Retorna só as placas cujo último evento é 'saida' (em aberto).
-// Retorna null se não foi possível consultar (offline/erro) — quem chamar
-// deve então usar o fallback local.
-async function buscarSaidasEmAbertoSupabase() {
-  if (!SUPABASE_URL || !SUPABASE_ANON) { console.warn('[Retorno] Supabase não configurado'); return null; }
-  try {
-    const r = await fetch(
-      `${SUPABASE_URL}/rest/v1/${TABLE_CHECKLIST}?select=*&order=created_at.desc&limit=300`,
-      { headers: SB_HEADERS }
-    );
-    if (!r.ok) {
-      console.error('[Retorno] Falha ao consultar Supabase:', r.status, await r.text());
-      return null;
-    }
-    const registros = await r.json();
-    console.log('[Retorno] Registros recebidos do Supabase:', registros.length);
-    const ultimoPorPlaca = {};
-    registros.forEach(r => {
-      // já vem ordenado do mais recente pro mais antigo, então o primeiro
-      // registro visto para cada placa é o mais recente
-      if (!ultimoPorPlaca[r.placa]) ultimoPorPlaca[r.placa] = r;
-    });
-    const abertas = Object.values(ultimoPorPlaca).filter(r => r.modo === 'saida');
-    console.log('[Retorno] Placas com saída em aberto:', abertas.map(r => r.placa));
-    return abertas;
-  } catch (e) {
-    console.error('[Retorno] Falha ao buscar saídas em aberto do Supabase (rede/CORS):', e);
-    return null;
-  }
-}
-
 function atualizarBotaoRetorno() {
   // O botão de retorno agora sempre aparece ativo — a validação por placa acontece ao clicar
   const btn = document.getElementById('btn-mode-retorno');
@@ -1777,7 +1733,7 @@ function atualizarBotaoRetorno() {
   btn.style.filter = '';
 }
 
-async function iniciarRetorno() {
+function iniciarRetorno() {
   const area = document.getElementById('retorno-placa-area');
   const sel  = document.getElementById('splash-placa-retorno');
   const msg  = document.getElementById('splash-retorno-msg');
@@ -1787,32 +1743,23 @@ async function iniciarRetorno() {
   area.style.display = 'block';
   msg.textContent = '';
   btnC.style.display = 'none';
-  sel.disabled = true;
-  sel.innerHTML = '<option value="">Buscando saídas em aberto...</option>';
 
-  // 1º — tenta buscar do Supabase (funciona entre aparelhos diferentes)
-  let saidasRecentes = await buscarSaidasEmAbertoSupabase();
-
-  // 2º — se não conseguiu (offline/erro), cai no fallback local (só deste aparelho)
-  if (saidasRecentes === null) {
-    const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
-    const ultimoPorPlaca = {};
-    registros.forEach(r => {
-      const chave = `${r.data_check || ''} ${r.hora_check || ''}`;
-      const atual = ultimoPorPlaca[r.placa];
-      if (!atual || chave >= `${atual.data_check || ''} ${atual.hora_check || ''}`) {
-        ultimoPorPlaca[r.placa] = r;
-      }
-    });
-    saidasRecentes = Object.values(ultimoPorPlaca).filter(r => r.modo === 'saida');
-  }
-
-  // Guarda em cache para uso por getSaidaMaisRecente() (onSplashPlacaChange / confirmarRetorno)
-  SAIDAS_ABERTAS_CACHE = saidasRecentes;
+  // Preencher placas com saída EM ABERTO de verdade: para cada placa, olha o
+  // registro mais recente (saída OU chegada) — só entra na lista se o último
+  // evento daquela placa for uma 'saida' (ou seja, ainda não retornou).
+  const registros = JSON.parse(localStorage.getItem('cl_checklists') || '[]');
+  const ultimoPorPlaca = {};
+  registros.forEach(r => {
+    const chave = `${r.data_check || ''} ${r.hora_check || ''}`;
+    const atual = ultimoPorPlaca[r.placa];
+    if (!atual || chave >= `${atual.data_check || ''} ${atual.hora_check || ''}`) {
+      ultimoPorPlaca[r.placa] = r;
+    }
+  });
+  const saidasRecentes = Object.values(ultimoPorPlaca).filter(r => r.modo === 'saida');
 
   // Preencher o dropdown apenas com essas placas em aberto, usando o
   // modelo do cadastro (VEICULOS_CACHE) quando disponível para exibição.
-  sel.disabled = false;
   sel.innerHTML = '<option value="">Selecione a placa...</option>';
 
   if (saidasRecentes.length > 0) {
