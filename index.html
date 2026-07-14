@@ -230,6 +230,15 @@ body{background:linear-gradient(135deg, #f4f6f9 0%, #e8eef3 100%);color:var(--te
 .fuel-alert-card.alert .fuel-alert-bar-fill{background:var(--fail)}
 .fuel-alert-stats{font-size:10.5px;color:var(--text3)}
 
+.maint-card{margin-top:10px;border-radius:10px;padding:10px 12px;font-family:var(--font-body);font-size:11.5px;line-height:1.55;border:1.5px solid var(--border);background:#f8fafc;color:var(--text2)}
+.maint-card.neutral{border-color:var(--border);background:#f8fafc;color:var(--text3)}
+.maint-title{font-family:var(--font-head);font-weight:800;font-size:13px;letter-spacing:.5px;margin-bottom:6px;text-transform:uppercase}
+.maint-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.maint-item{background:rgba(0,0,0,.03);border-radius:8px;padding:8px 10px}
+.maint-item .maint-label{font-size:10px;color:var(--text3);font-weight:700;letter-spacing:.5px;text-transform:uppercase;margin-bottom:2px}
+.maint-item .maint-value{font-size:12.5px;color:var(--text);font-weight:600}
+.maint-item.venc-alert .maint-value{color:var(--fail)}
+
 /* ── CAMPO OBRIGATÓRIO ───────────────────── */
 .field-required{color:var(--fail);font-weight:800}
 .field-input.field-invalid{border-color:var(--fail)!important;box-shadow:0 0 0 3px rgba(220,53,69,.15)!important}
@@ -406,6 +415,9 @@ input[type=file]{display:none}
       <div class="full">
         <div class="fuel-alert-card neutral" id="fuel-alert-card">⛽ Selecione o veículo para ver a estimativa de combustível.</div>
       </div>
+      <div class="full">
+        <div class="maint-card neutral" id="maint-card">🔧 Selecione o veículo para ver a última graxa e a última troca de óleo.</div>
+      </div>
     </div>
   </div>
 
@@ -524,7 +536,9 @@ const SECTIONS = [
       {id:'ar_cond',      label:'Ar Condicionado',                       sub:'Gás e filtros'},
       {id:'vidros_el',    label:'Vidros Elétricos'},
       {id:'velocimetro',  label:'Velocímetro'},
-      {id:'tacografo',    label:'Tacógrafo e Disco do Tacógrafo',        foto:true},
+      {id:'tacografo',    label:'Tacógrafo',                             foto:true},
+      {id:'disco_tacografo', label:'Disco do Tacógrafo',                 foto:true},
+      {id:'buchas_susp_cabine', label:'Buchas da Suspensão da Cabine'},
       {id:'buzina',       label:'Buzina / Sirene de Ré'},
       {id:'limpador',     label:'Limpador de Para-brisa'},
       {id:'bancos',       label:'Bancos',                                opts:['LIMPOS','SUJOS','RASGADO','FALHA'], noNA:true},
@@ -607,6 +621,7 @@ function selectMode(mode) {
   updateProgress();
   setupAutoSave();
   updateFuelAlert();
+  updateMaintCard();
 }
 
 function voltarSplash() {
@@ -1002,6 +1017,8 @@ function captureFields() {
 const TABLE_VEICULOS    = 'saniville_veiculos';
 const TABLE_MOTORISTAS  = 'saniville_motoristas';
 const TABLE_COMBUSTIVEL = 'saniville_combustivel';
+const TABLE_ENGRAXAMENTO = 'saniville_engraxamento'; // registros de graxa por veículo (sistema de Gestão de Frota)
+const TABLE_MANUTENCAO   = 'saniville_manutencao';   // registros de manutenção (inclui troca de óleo como serviço) por veículo
 
 let VEICULOS_CACHE = []; // [{id, placa, modelo}] — alimentado pelo Supabase, usado p/ achar o id do veículo
 
@@ -1156,6 +1173,7 @@ function onVeiculoChange(sel) {
   }
   saveState();
   updateFuelAlert();
+  updateMaintCard();
   updateUltimoKmBadge(placa);
 }
 
@@ -1218,6 +1236,91 @@ async function getCombustivelVeiculo(placa) {
       dataUltimo: maisRecente.data || ''
     };
   } catch(e) { return { ok:false }; }
+}
+
+// ─── ÚLTIMA GRAXA / ÚLTIMA TROCA DE ÓLEO (dados direto do Supabase) ─────
+// Puxa direto das tabelas do sistema de Gestão de Frota:
+//   - saniville_engraxamento: registros de graxa (campos: veiculo, data, km, pontos, graxa, responsavel)
+//   - saniville_manutencao: registros de manutenção em geral. A troca de óleo
+//     não tem tabela própria — entra aqui como um serviço cujo texto contém
+//     "óleo" (ex.: "Troca de óleo, filtros"), com status = 'Concluída'.
+async function getManutencaoVeiculo(placa) {
+  try {
+    let vei = VEICULOS_CACHE.find(v => v.placa === placa);
+    if (!vei) {
+      const rVei = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_VEICULOS}?select=id,placa&placa=eq.${encodeURIComponent(placa)}`, { headers: SB_HEADERS });
+      if (!rVei.ok) return { ok:false };
+      const veis = await rVei.json();
+      vei = veis[0];
+    }
+    if (!vei) return { ok:true, hasData:false };
+
+    const [rGraxa, rOleo] = await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/${TABLE_ENGRAXAMENTO}?select=data,km&veiculo=eq.${encodeURIComponent(vei.id)}&order=data.desc&limit=1`, { headers: SB_HEADERS }),
+      fetch(`${SUPABASE_URL}/rest/v1/${TABLE_MANUTENCAO}?select=data_prev,km_prev&veiculo=eq.${encodeURIComponent(vei.id)}&status=eq.${encodeURIComponent('Concluída')}&servico=ilike.${encodeURIComponent('*óleo*')}&order=data_prev.desc&limit=1`, { headers: SB_HEADERS })
+    ]);
+    if (!rGraxa.ok || !rOleo.ok) return { ok:false };
+
+    const graxaRows = await rGraxa.json();
+    const oleoRows  = await rOleo.json();
+
+    return {
+      ok: true, hasData: true,
+      graxa: graxaRows[0] ? { data: graxaRows[0].data, km: graxaRows[0].km } : null,
+      oleo:  oleoRows[0]  ? { data: oleoRows[0].data_prev, km: oleoRows[0].km_prev } : null
+    };
+  } catch(e) { return { ok:false }; }
+}
+
+// Token de corrida — evita que uma resposta antiga sobrescreva uma mais nova
+let _maintReqId = 0;
+
+// Atualiza o card de "última graxa / última troca de óleo" com dados ao vivo do Supabase
+async function updateMaintCard() {
+  const card = document.getElementById('maint-card');
+  if (!card) return;
+
+  const placa = vSel('placa').trim();
+  if (!placa) {
+    card.className = 'maint-card neutral';
+    card.innerHTML = '🔧 Selecione o veículo para ver a última graxa e a última troca de óleo.';
+    return;
+  }
+
+  const myReq = ++_maintReqId;
+  card.className = 'maint-card neutral';
+  card.innerHTML = '🔧 Verificando...';
+
+  const info = await getManutencaoVeiculo(placa);
+  if (myReq !== _maintReqId) return; // resposta antiga, descarta
+
+  if (!info || !info.ok) {
+    card.className = 'maint-card neutral';
+    card.innerHTML = '🔧 Sem conexão para verificar graxa/óleo.';
+    return;
+  }
+
+  const graxaTxt = info.graxa
+    ? `${fmtDataBR(info.graxa.data)}${info.graxa.km ? ' · ' + parseInt(info.graxa.km).toLocaleString('pt-BR') + ' km' : ''}`
+    : 'Sem registro';
+  const oleoTxt = info.oleo
+    ? `${fmtDataBR(info.oleo.data)}${info.oleo.km ? ' · ' + parseInt(info.oleo.km).toLocaleString('pt-BR') + ' km' : ''}`
+    : 'Sem registro';
+
+  card.className = 'maint-card';
+  card.innerHTML = `
+    <div class="maint-title">🔧 Última Graxa / Última Troca de Óleo</div>
+    <div class="maint-grid">
+      <div class="maint-item ${!info.graxa ? 'venc-alert' : ''}">
+        <div class="maint-label">Última Graxa</div>
+        <div class="maint-value">${graxaTxt}</div>
+      </div>
+      <div class="maint-item ${!info.oleo ? 'venc-alert' : ''}">
+        <div class="maint-label">Última Troca de Óleo</div>
+        <div class="maint-value">${oleoTxt}</div>
+      </div>
+    </div>
+  `;
 }
 
 function fmtDataBR(iso) {
