@@ -1199,7 +1199,7 @@ async function getCombustivelVeiculo(placa) {
 
     // 2) Busca os abastecimentos de tanque cheio mais recentes desse veículo direto no Supabase
     const rComb = await fetch(
-      `${SUPABASE_URL}/rest/v1/${TABLE_COMBUSTIVEL}?select=km,km_l,data,hora&veiculo=eq.${encodeURIComponent(vei.id)}&cheio=eq.1&order=data.desc,hora.desc&limit=20`,
+      `${SUPABASE_URL}/rest/v1/${TABLE_COMBUSTIVEL}?select=km,kml,data,hora&veiculo=eq.${encodeURIComponent(vei.id)}&cheio=eq.1&order=data.desc,hora.desc&limit=20`,
       { headers: SB_HEADERS }
     );
     if (!rComb.ok) return { ok:false };
@@ -1214,10 +1214,10 @@ async function getCombustivelVeiculo(placa) {
 
     // Já para a MÉDIA de consumo (km/L), aí sim só entram registros com
     // km_l já calculado e válido.
-    const cheios = rows.filter(c => c.km_l && c.km_l !== '-' && !isNaN(parseFloat(c.km_l)));
+    const cheios = rows.filter(c => c.kml && c.kml !== '-' && !isNaN(parseFloat(c.kml)));
     const ultimos = cheios.slice(0, FUEL_NUM_ABASTEC);
     const mediaKmL = ultimos.length
-      ? ultimos.reduce((s, c) => s + parseFloat(c.km_l), 0) / ultimos.length
+      ? ultimos.reduce((s, c) => s + parseFloat(c.kml), 0) / ultimos.length
       : null;
 
     if (mediaKmL === null) {
