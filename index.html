@@ -583,6 +583,21 @@ function selectMode(mode) {
   // Se tiver um checklist de saída salvo, associar id
   loadState();
 
+  // A SAÍDA nunca deve reaproveitar respostas de item (OK/falha/etc.) de uma
+  // saída anterior que não chegou a ser enviada (ex.: app fechado no meio do
+  // preenchimento). Cada saída precisa ser preenchida do zero. O modo CHEGADA
+  // continua puxando os dados da saída de propósito — isso é o pré-preenchimento
+  // intencional feito em confirmarRetorno().
+  if (mode === 'saida') {
+    Object.keys(st).forEach(k => {
+      if (k.startsWith('saida_')) delete st[k];
+    });
+    Object.keys(st.fotos || {}).forEach(k => {
+      if (st.fotos[k].mode === 'saida') delete st.fotos[k];
+    });
+    saveState();
+  }
+
   // Adaptar layout ao modo
   const isSaida = mode === 'saida';
   const badge = document.getElementById('mode-badge-el');
