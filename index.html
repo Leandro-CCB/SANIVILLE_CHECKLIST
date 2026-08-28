@@ -1042,7 +1042,7 @@ async function loadVeiculos() {
 
   // 1º — tenta Supabase (fonte de verdade)
   try {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_VEICULOS}?select=id,placa,modelo&order=placa&status=eq.Ativo`, {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_VEICULOS}?select=id,placa,modelo&order=placa&status=ilike.ativo`, {
       headers: SB_HEADERS
     });
     if (r.ok) {
@@ -1080,7 +1080,7 @@ async function loadMotoristas() {
 
   // 1º — tenta Supabase (fonte de verdade)
   try {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_MOTORISTAS}?select=nome&order=nome&status=eq.Ativo`, {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${TABLE_MOTORISTAS}?select=nome&order=nome&status=ilike.ativo`, {
       headers: SB_HEADERS
     });
     if (r.ok) {
